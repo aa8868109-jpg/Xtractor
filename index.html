@@ -1,0 +1,1375 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xtractor — Smart Attendance System</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.4/html5-qrcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/exceljs@4.3.0/dist/exceljs.min.js"></script>
+    <style>
+        :root {
+            --ink: #050d14;
+            --ink-2: #091320;
+            --ink-3: #0e1e30;
+            --surface: #0b1825;
+            --border: rgba(0, 180, 255, 0.08);
+            --border-bright: rgba(0, 180, 255, 0.18);
+            --accent: #00c8f0;
+            --accent-dim: rgba(0, 200, 240, 0.12);
+            --accent-glow: rgba(0, 200, 240, 0.28);
+            --accent-2: #1a5fd4;
+            --accent-2-dim: rgba(26, 95, 212, 0.15);
+            --danger: #ff4f6d;
+            --danger-dim: rgba(255, 79, 109, 0.12);
+            --warn: #f5a623;
+            --warn-dim: rgba(245, 166, 35, 0.12);
+            --text-primary: #e8f4ff;
+            --text-secondary: #6a8fab;
+            --text-tertiary: #2e4d66;
+            --font-display: 'Syne', sans-serif;
+            --font-body: 'DM Sans', sans-serif;
+            --font-mono: 'DM Mono', monospace;
+            --radius: 14px;
+            --radius-sm: 8px;
+            --radius-lg: 22px;
+            --shadow-sm: 0 2px 8px rgba(0,0,0,0.5);
+            --shadow-md: 0 8px 32px rgba(0,0,0,0.6);
+            --shadow-lg: 0 20px 60px rgba(0,0,0,0.8);
+        }
+
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: var(--font-body);
+            background: var(--ink);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px 16px;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* ── Ambient Background ── */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 90% 60% at 15% -5%, rgba(0,140,220,0.12) 0%, transparent 60%),
+                radial-gradient(ellipse 70% 50% at 85% 105%, rgba(26,95,212,0.1) 0%, transparent 60%),
+                radial-gradient(ellipse 50% 40% at 50% 50%, rgba(0,200,240,0.04) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Animated grid lines */
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(0,180,255,0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0,180,255,0.03) 1px, transparent 1px);
+            background-size: 48px 48px;
+            pointer-events: none;
+            z-index: 0;
+            animation: gridDrift 20s linear infinite;
+        }
+
+        @keyframes gridDrift {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(48px, 48px); }
+        }
+
+        /* ── Container ── */
+        .container {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 480px;
+            animation: containerReveal 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+
+        @keyframes containerReveal {
+            from { opacity: 0; transform: translateY(32px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ── Card ── */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 40px 36px;
+            box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255,255,255,0.05);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--accent), rgba(26,95,212,0.8), transparent);
+            opacity: 0.7;
+        }
+
+        /* ── Top Bar ── */
+        #top-bar {
+            display: none;
+            margin-bottom: 24px;
+        }
+
+        .top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: var(--ink-3);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+
+        .mode-badge {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            padding: 6px 14px;
+            border-radius: 100px;
+        }
+
+        .mode-badge.student {
+            background: var(--accent-dim);
+            color: var(--accent);
+            border: 1px solid rgba(0,200,240,0.3);
+        }
+
+        .mode-badge.doctor {
+            background: var(--accent-2-dim);
+            color: #60a5fa;
+            border: 1px solid rgba(26,95,212,0.4);
+        }
+
+        .btn-exit {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            padding: 7px 16px;
+            background: transparent;
+            border: 1px solid var(--border-bright);
+            color: var(--text-secondary);
+            border-radius: 100px;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: auto;
+            margin-top: 0;
+        }
+
+        .btn-exit:hover {
+            border-color: var(--danger);
+            color: var(--danger);
+            background: var(--danger-dim);
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* ── Alert ── */
+        .alert {
+            display: none;
+            padding: 13px 16px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-family: var(--font-body);
+            font-weight: 400;
+            margin-bottom: 20px;
+            animation: alertSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            line-height: 1.5;
+        }
+
+        @keyframes alertSlide {
+            from { opacity: 0; transform: translateY(-6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .alert.show { display: block; }
+        .alert-success { background: rgba(78,240,180,0.1); color: var(--accent); border: 1px solid rgba(78,240,180,0.25); }
+        .alert-error { background: var(--danger-dim); color: var(--danger); border: 1px solid rgba(255,79,109,0.25); }
+        .alert-warning { background: var(--warn-dim); color: var(--warn); border: 1px solid rgba(245,166,35,0.25); }
+        .alert-info { background: var(--accent-2-dim); color: var(--accent-2); border: 1px solid rgba(124,106,247,0.25); }
+
+        /* ── Header ── */
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .logo-link {
+            display: inline-block;
+            text-decoration: none;
+            margin-bottom: 20px;
+        }
+
+        .logo-mark {
+            width: 72px;
+            height: 72px;
+            margin: 0 auto 18px;
+            position: relative;
+        }
+
+        .logo-mark svg {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Fallback if logo.png loads */
+        .logo-img {
+            width: 72px;
+            height: 72px;
+            object-fit: contain;
+            filter: drop-shadow(0 0 20px rgba(78,240,180,0.4));
+            animation: logoFloat 4s ease-in-out infinite;
+        }
+
+        @keyframes logoFloat {
+            0%, 100% { transform: translateY(0px); filter: drop-shadow(0 0 20px rgba(0,180,255,0.45)); }
+            50% { transform: translateY(-6px); filter: drop-shadow(0 4px 32px rgba(0,200,240,0.7)); }
+        }
+
+        .logo-wordmark {
+            font-family: var(--font-display);
+            font-size: 34px;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+        }
+
+        .logo-wordmark span {
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+        }
+
+        /* Divider */
+        .divider {
+            height: 1px;
+            background: var(--border);
+            margin: 28px 0;
+        }
+
+        /* ── Form Elements ── */
+        .form-group {
+            margin-bottom: 18px;
+        }
+
+        label {
+            display: block;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        select {
+            width: 100%;
+            padding: 14px 16px;
+            background: var(--ink-3);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            font-family: var(--font-mono);
+            font-size: 15px;
+            color: var(--text-primary);
+            transition: all 0.2s;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="text"]::placeholder,
+        input[type="number"]::placeholder {
+            color: var(--text-tertiary);
+        }
+
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        select:focus {
+            border-color: var(--accent);
+            background: var(--ink-2);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        /* ── Buttons ── */
+        button {
+            width: 100%;
+            padding: 15px 20px;
+            font-family: var(--font-display);
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            margin-top: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        button::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(255,255,255,0.08) 0%, transparent 60%);
+            pointer-events: none;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+            color: white;
+            box-shadow: 0 4px 20px rgba(0,180,255,0.3);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(0,180,255,0.45);
+        }
+
+        .btn-primary:active:not(:disabled) { transform: translateY(0); }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* Secondary / Accent-2 button */
+        .btn-accent2 {
+            background: var(--accent-2);
+            color: white;
+            box-shadow: 0 4px 20px rgba(124,106,247,0.3);
+        }
+
+        .btn-accent2:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(124,106,247,0.45);
+        }
+
+        /* Orange / warning */
+        .btn-secondary {
+            background: transparent;
+            color: var(--warn);
+            border: 1px solid rgba(245,166,35,0.35);
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: var(--warn-dim);
+            transform: translateY(-1px);
+            box-shadow: none;
+        }
+
+        .btn-green {
+            background: transparent;
+            color: var(--accent);
+            border: 1px solid rgba(0,200,240,0.35);
+        }
+
+        .btn-green:hover:not(:disabled) {
+            background: var(--accent-dim);
+            transform: translateY(-1px);
+            box-shadow: none;
+        }
+
+        /* ── Lock Screen ── */
+        #locked-section {
+            display: none;
+            text-align: center;
+            padding: 20px 0;
+        }
+
+        .lock-icon {
+            font-size: 52px;
+            margin-bottom: 20px;
+            animation: lockPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes lockPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .lock-title {
+            font-family: var(--font-display);
+            font-size: 24px;
+            font-weight: 800;
+            color: var(--danger);
+            margin-bottom: 16px;
+            letter-spacing: -0.02em;
+        }
+
+        #lock-message {
+            background: var(--danger-dim);
+            border: 1px solid rgba(255,79,109,0.25);
+            padding: 18px 20px;
+            border-radius: var(--radius);
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1.7;
+            margin-bottom: 20px;
+        }
+
+        #lock-link {
+            display: inline-block;
+            background: var(--accent);
+            color: var(--ink);
+            padding: 12px 28px;
+            border-radius: 100px;
+            text-decoration: none;
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: 13px;
+            letter-spacing: 0.05em;
+            transition: all 0.2s;
+            box-shadow: 0 4px 20px rgba(78,240,180,0.3);
+        }
+
+        #lock-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 28px rgba(78,240,180,0.45);
+        }
+
+        /* ── Student Section ── */
+        .student-name-display {
+            background: var(--ink-3);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px 20px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .student-name-display h2 {
+            font-family: var(--font-mono);
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--accent);
+            letter-spacing: 0.04em;
+        }
+
+        /* Location Status */
+        .location-status {
+            padding: 10px 14px;
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            font-family: var(--font-mono);
+            text-align: center;
+            margin-bottom: 18px;
+        }
+
+        .location-status.in-region { background: rgba(78,240,180,0.08); color: var(--accent); border: 1px solid rgba(78,240,180,0.2); }
+        .location-status.out-region { background: var(--danger-dim); color: var(--danger); border: 1px solid rgba(255,79,109,0.2); }
+        .location-status.loading { background: var(--accent-2-dim); color: var(--accent-2); border: 1px solid rgba(124,106,247,0.2); }
+
+        /* QR Status Row */
+        .qr-status {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .qr-check {
+            background: var(--ink-3);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 14px 8px;
+            text-align: center;
+            transition: all 0.3s;
+        }
+
+        .qr-check-title {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-tertiary);
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        .checkbox-custom {
+            width: 38px;
+            height: 38px;
+            margin: 0 auto;
+            border-radius: 50%;
+            border: 2px solid var(--border-bright);
+            background: var(--ink-2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .checkbox-custom span {
+            color: transparent;
+            font-size: 16px;
+            font-weight: 700;
+            transition: all 0.3s;
+        }
+
+        .checkbox-custom.checked {
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            border-color: var(--accent);
+            box-shadow: 0 0 18px rgba(0,180,255,0.5);
+        }
+
+        .checkbox-custom.checked span {
+            color: white;
+        }
+
+        .qr-check:has(.checkbox-custom.checked) {
+            border-color: rgba(0,200,240,0.3);
+            background: rgba(0,180,255,0.05);
+        }
+
+        /* ── Scanner ── */
+        #scanner-container {
+            display: none;
+            margin-top: 18px;
+            background: var(--ink-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            overflow: hidden;
+        }
+
+        .scanner-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .scanner-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent);
+            animation: blink 1.4s ease-in-out infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.2; }
+        }
+
+        .scanner-label {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        #qr_reader {
+            width: 100%;
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+            background: #000;
+            aspect-ratio: 1 / 1;
+            position: relative;
+            min-height: 280px;
+        }
+
+        #qr_reader video {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: cover !important;
+        }
+
+        .scanner-status {
+            text-align: center;
+            padding: 10px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 10px;
+            border-radius: 6px;
+            background: var(--ink-3);
+            transition: all 0.2s;
+        }
+
+        .scanner-status.scanning { color: var(--accent); background: var(--accent-dim); }
+        .scanner-status.processing { color: var(--warn); background: var(--warn-dim); }
+
+        .scanner-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .scanner-controls button { margin-top: 0; }
+
+        /* ── Doctor Panel ── */
+        #doctor-panel { display: none; }
+
+        .section-label {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--text-tertiary);
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-label::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border);
+        }
+
+        /* Lecture Info */
+        #lecture-info { display: none; }
+
+        .current-lecture-card {
+            background: var(--ink-3);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .current-lecture-card .lec-label {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-tertiary);
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        #current-lecture {
+            font-family: var(--font-display);
+            font-size: 28px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.02em;
+        }
+
+        /* Toggle */
+        .student-mode-toggle-wrapper {
+            background: var(--ink-3);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 18px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .toggle-info { flex: 1; }
+
+        .toggle-info .toggle-text {
+            font-family: var(--font-display);
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-primary);
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .mode-status {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .toggle-label {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            gap: 0;
+        }
+
+        #student-mode-toggle { display: none; }
+
+        .toggle-switch {
+            position: relative;
+            width: 48px;
+            height: 26px;
+            background: var(--ink-2);
+            border: 1px solid var(--border-bright);
+            border-radius: 100px;
+            transition: all 0.3s;
+            flex-shrink: 0;
+        }
+
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            background: var(--text-secondary);
+            border-radius: 50%;
+            top: 3px;
+            left: 3px;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        #student-mode-toggle:checked + .toggle-switch {
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            border-color: var(--accent);
+            box-shadow: 0 0 14px rgba(0,180,255,0.4);
+        }
+
+        #student-mode-toggle:checked + .toggle-switch::after {
+            left: 26px;
+            background: white;
+        }
+
+        /* QR Selection Wrapper */
+        .qr-selection-wrapper {
+            background: var(--ink-3);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 18px 20px;
+            margin-bottom: 20px;
+        }
+
+        .qr-radio-group {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .qr-radio-label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            padding: 10px 12px;
+            background: var(--ink-2);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            transition: all 0.3s;
+            user-select: none;
+        }
+
+        .qr-radio-label:hover {
+            background: var(--ink-1);
+            border-color: var(--accent);
+        }
+
+        .qr-radio-label input {
+            display: none;
+        }
+
+        .qr-radio-label input:checked + .qr-radio-text {
+            color: var(--accent);
+            font-weight: 700;
+        }
+
+        .qr-radio-label input:checked {
+            accent-color: var(--accent);
+        }
+
+        .qr-radio-label:has(input:checked) {
+            background: rgba(0, 180, 255, 0.1);
+            border-color: var(--accent);
+            box-shadow: 0 0 8px rgba(0, 180, 255, 0.2);
+        }
+
+        .qr-radio-text {
+            font-family: var(--font-display);
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            transition: all 0.3s;
+        }
+
+        /* Students List */
+        .students-list-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+
+        .students-count {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-tertiary);
+        }
+
+        .students-list {
+            background: var(--ink-2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            max-height: 360px;
+            overflow-y: auto;
+        }
+
+        .students-list::-webkit-scrollbar { width: 4px; }
+        .students-list::-webkit-scrollbar-track { background: transparent; }
+        .students-list::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 2px; }
+
+        .student-item {
+            padding: 14px 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            border-bottom: 1px solid var(--border);
+            transition: background 0.2s;
+            animation: itemSlide 0.3s ease;
+        }
+
+        @keyframes itemSlide {
+            from { opacity: 0; transform: translateX(-8px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .student-item:last-child { border-bottom: none; }
+        .student-item:hover { background: var(--ink-3); }
+
+        .student-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 3px;
+        }
+
+        .student-code {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-tertiary);
+        }
+
+        .student-status {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            background: var(--accent-dim);
+            color: var(--accent);
+            padding: 4px 10px;
+            border-radius: 100px;
+            white-space: nowrap;
+            border: 1px solid rgba(78,240,180,0.2);
+        }
+
+        /* Location Alert Indicator - Red Flashing Icon */
+        .location-alert-indicator {
+            display: inline-block;
+            margin-left: 6px;
+            font-size: 14px;
+            animation: locationAlert 0.8s infinite;
+            filter: hue-rotate(0deg) brightness(1.3);
+            text-shadow: 0 0 6px rgba(220, 38, 38, 0.6);
+        }
+
+        @keyframes locationAlert {
+            0%, 100% {
+                opacity: 1;
+                text-shadow: 0 0 6px rgba(220, 38, 38, 0.6);
+                transform: scale(1);
+            }
+            50% {
+                opacity: 0.3;
+                text-shadow: 0 0 12px rgba(220, 38, 38, 0.3);
+                transform: scale(0.95);
+            }
+        }
+
+        /* Highlight row for out-of-region students */
+        .student-item.out-of-region {
+            background: rgba(220, 38, 38, 0.05);
+            border-left: 3px solid #dc2626;
+        }
+
+        .student-item.out-of-region:hover {
+            background: rgba(220, 38, 38, 0.1);
+        }
+
+        .empty-list {
+            text-align: center;
+            padding: 40px 20px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-tertiary);
+            letter-spacing: 0.06em;
+        }
+
+        .empty-list::before {
+            content: '···';
+            display: block;
+            font-size: 24px;
+            margin-bottom: 12px;
+            letter-spacing: 0.5em;
+            color: var(--text-tertiary);
+        }
+
+        /* ── Responsive ── */
+        @media (max-width: 520px) {
+            .card { padding: 28px 22px; }
+            .logo-wordmark { font-size: 28px; }
+            #qr_reader { min-height: 260px; }
+            .scanner-controls { grid-template-columns: 1fr; }
+        }
+
+        @media (max-width: 380px) {
+            .card { padding: 22px 16px; }
+        }
+
+        /* ── Custom scrollbar for whole page ── */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--ink); }
+        ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+
+        /* ── Stagger animation for sections ── */
+        #login-section { animation: fadeUp 0.5s 0.1s cubic-bezier(0.16, 1, 0.3, 1) both; }
+        #student-section { animation: fadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+        #doctor-panel { animation: fadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Sign-in button override */
+        #signin-btn {
+            background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+            color: white;
+            font-family: var(--font-display);
+            font-weight: 800;
+            font-size: 14px;
+            letter-spacing: 0.08em;
+            box-shadow: 0 4px 24px rgba(0,180,255,0.35);
+        }
+
+        #signin-btn:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 32px rgba(0,180,255,0.5);
+        }
+
+        #signin-btn:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: 0 2px 10px rgba(0,180,255,0.15);
+        }
+
+        /* ── Particle dots decoration ── */
+        .deco-dots {
+            position: absolute;
+            top: 0; right: 0;
+            width: 120px;
+            height: 120px;
+            pointer-events: none;
+            opacity: 0.3;
+        }
+
+        /* ── Lectures Grid Styling ── */
+        .lectures-grid-container {
+            background: linear-gradient(135deg, var(--ink-3) 0%, rgba(14, 30, 48, 0.7) 100%);
+            border: 1px solid var(--border-bright);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            margin-bottom: 20px;
+            backdrop-filter: blur(4px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+
+        .lectures-header {
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .lectures-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .lecture-checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 14px;
+            background: var(--ink-2);
+            border: 2px solid var(--border);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            user-select: none;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .lecture-checkbox-label::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(0, 200, 240, 0.1) 0%, rgba(26, 95, 212, 0.08) 100%);
+            opacity: 0;
+            transition: opacity 0.25s;
+        }
+
+        .lecture-checkbox-label input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            accent-color: var(--accent);
+            flex-shrink: 0;
+            position: relative;
+            z-index: 1;
+        }
+
+        .checkbox-text {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+            transition: color 0.25s;
+            flex: 1;
+            position: relative;
+            z-index: 1;
+        }
+
+        .lecture-checkbox-label:hover {
+            border-color: var(--accent);
+            background: var(--ink-2);
+            box-shadow: 0 0 12px rgba(0, 200, 240, 0.15);
+            transform: translateY(-2px);
+        }
+
+        .lecture-checkbox-label:hover::before {
+            opacity: 1;
+        }
+
+        .lecture-checkbox-label input[type="checkbox"]:checked + .checkbox-text,
+        .lecture-checkbox-label input[type="checkbox"]:checked ~ .checkbox-text {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .lecture-checkbox-label input[type="checkbox"]:checked {
+            accent-color: #00ff88;
+        }
+
+        .lecture-all-checkbox {
+            background: linear-gradient(135deg, var(--accent-2-dim) 0%, rgba(26, 95, 212, 0.2) 100%);
+            border-color: var(--accent-2);
+            box-shadow: 0 0 16px rgba(26, 95, 212, 0.2);
+            font-weight: 600;
+        }
+
+        .lecture-all-checkbox:hover {
+            border-color: var(--accent-2);
+            box-shadow: 0 0 20px rgba(26, 95, 212, 0.3);
+        }
+
+        .export-button {
+            width: 100%;
+            padding: 14px 20px;
+            background: linear-gradient(135deg, #f5a623, #ff9500);
+            color: var(--ink);
+            font-family: var(--font-display);
+            font-weight: 800;
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            box-shadow: 0 4px 20px rgba(245, 166, 35, 0.35);
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            font-size: 14px;
+            letter-spacing: 0.05em;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .export-button::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.15) 0%, transparent 60%);
+            pointer-events: none;
+        }
+
+        .export-button:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 30px rgba(245, 166, 35, 0.45);
+        }
+
+        .export-button:active:not(:disabled) {
+            transform: translateY(-1px);
+        }
+
+        .export-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 640px) {
+            .lectures-grid {
+                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+                gap: 10px;
+            }
+
+            .lecture-checkbox-label {
+                padding: 10px 12px;
+                font-size: 12px;
+            }
+
+            .lectures-grid-container {
+                padding: 16px;
+                border-radius: var(--radius);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+
+        <!-- Top Control Bar -->
+        <div id="top-bar" style="display: none; margin-bottom: 16px;">
+            <div class="top-bar">
+                <span class="mode-badge student" id="mode-badge">STUDENT</span>
+                <button class="btn-exit" onclick="exitMode()">← EXIT</button>
+            </div>
+        </div>
+
+        <div class="card">
+
+            <!-- Alert -->
+            <div class="alert" id="alert"></div>
+
+            <!-- 🔐 Locked Screen -->
+            <div id="locked-section" style="display: none;">
+                <div class="lock-icon">🔒</div>
+                <div class="lock-title">Access Restricted</div>
+                <div id="lock-message">Website is currently locked by the administrator.</div>
+                <div id="lock-link-container" style="display: none; margin-top: 18px;">
+                    <a id="lock-link" href="#" target="_blank" rel="noopener noreferrer">Visit Link →</a>
+                </div>
+            </div>
+
+            <!-- Header -->
+            <div class="header">
+                <a href="https://www.linkedin.com/in/eng-ahmed-waked-4a105a266" target="_blank" rel="noopener noreferrer" class="logo-link">
+                    <img src="logo.png" alt="Xtractor" class="logo-img" onerror="this.style.display='none'">
+                </a>
+                <div class="logo-wordmark">X<span>tractor</span></div>
+                <div class="subtitle">Smart Attendance System</div>
+            </div>
+
+            <!-- ====== Login ====== -->
+            <div id="login-section">
+                <div class="form-group" dir="ltr">
+                    <label for="student-code">Student ID</label>
+                    <input type="text" id="student-code" placeholder="Enter your Student ID" maxlength="10" autocomplete="off">
+                </div>
+                <button id="signin-btn" onclick="submitStudentCode()">Sign In →</button>
+            </div>
+
+            <!-- ====== Student View ====== -->
+            <div id="student-section" style="display: none;">
+                <div class="student-name-display">
+                    <h2 id="student-name-display">Welcome —</h2>
+                </div>
+
+                <div id="location-status" class="location-status loading" style="display:none;">
+                    Determining your location…
+                </div>
+
+                <!-- QR Progress -->
+                <div class="section-label">QR Progress</div>
+                <div class="qr-status" id="qr-status">
+                    <div class="qr-check">
+                        <div class="qr-check-title">QR 1</div>
+                        <div class="checkbox-custom" id="qr1-check"><span>✓</span></div>
+                    </div>
+                    <div class="qr-check">
+                        <div class="qr-check-title">QR 2</div>
+                        <div class="checkbox-custom" id="qr2-check"><span>✓</span></div>
+                    </div>
+                    <div class="qr-check">
+                        <div class="qr-check-title">QR 3</div>
+                        <div class="checkbox-custom" id="qr3-check"><span>✓</span></div>
+                    </div>
+                </div>
+
+                <!-- Scanner -->
+                <div id="scanner-container">
+                    <div class="scanner-header">
+                        <div class="scanner-dot"></div>
+                        <span class="scanner-label">Camera Active</span>
+                    </div>
+                    <div id="qr_reader"></div>
+                    <div class="scanner-status" id="scanner-status">Point camera at QR code</div>
+                    <div class="scanner-controls">
+                        <button class="btn-secondary" onclick="stopScanner()">Stop</button>
+                        <button class="btn-green" onclick="startScanner()">Refresh</button>
+                    </div>
+                </div>
+
+                <button id="start-scanner-btn" onclick="startScanner()" style="margin-top: 18px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: white; font-family: var(--font-display); font-weight: 800; box-shadow: 0 4px 20px rgba(0,180,255,0.35);">
+                    Start QR Scanner →
+                </button>
+            </div>
+
+            <!-- ====== Instructor Dashboard ====== -->
+            <div id="doctor-panel">
+                <div class="section-label">Lecture Setup</div>
+
+                <div class="lecture-selector">
+                    <div class="form-group">
+                        <label for="lecture-number">Lecture Number</label>
+                        <input type="number" id="lecture-number" placeholder="Lecture 5" min="1">
+                    </div>
+                    <button onclick="selectLecture()" style="background: linear-gradient(135deg, var(--accent-2), #0d3fa8); color: white; font-family: var(--font-display); font-weight: 800; box-shadow: 0 4px 20px rgba(26,95,212,0.35);">
+                        Activate Lecture →
+                    </button>
+                </div>
+
+                <div id="lecture-info">
+                    <div class="current-lecture-card">
+                        <div class="lec-label">Active Session</div>
+                        <div id="current-lecture">Lec 0</div>
+                    </div>
+
+                    <!-- Export Single Lecture Button -->
+                    <button onclick="exportToExcel()" style="background: linear-gradient(135deg, #4ef0b4, #00c8f0); color: var(--ink); font-family: var(--font-display); font-weight: 800; box-shadow: 0 4px 20px rgba(78,240,180,0.35); margin-bottom: 20px;">
+                        Export Single Lecture
+                    </button>
+
+                    <!-- Multiple Lectures Export Section -->
+                    <div class="section-label">Export Multiple Lectures</div>
+                    <div class="lectures-grid-container">
+                        <div class="lectures-header">
+                            <label class="lecture-checkbox-label lecture-all-checkbox">
+                                <input type="checkbox" id="lec-all" onchange="toggleAllLectures()"> 
+                                <span class="checkbox-text">All Lectures</span>
+                            </label>
+                        </div>
+                        <div class="lectures-grid">
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="1" data-lecture="LEC_1"><span class="checkbox-text">Lec 1</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="2" data-lecture="LEC_2"><span class="checkbox-text">Lec 2</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="3" data-lecture="LEC_3"><span class="checkbox-text">Lec 3</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="4" data-lecture="LEC_4"><span class="checkbox-text">Lec 4</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="5" data-lecture="LEC_5"><span class="checkbox-text">Lec 5</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="6" data-lecture="LEC_6"><span class="checkbox-text">Lec 6</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="7" data-lecture="LEC_7"><span class="checkbox-text">Lec 7</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="8" data-lecture="LEC_8"><span class="checkbox-text">Lec 8</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="9" data-lecture="LEC_9"><span class="checkbox-text">Lec 9</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="10" data-lecture="LEC_10"><span class="checkbox-text">Lec 10</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="11" data-lecture="LEC_11"><span class="checkbox-text">Lec 11</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="12" data-lecture="LEC_12"><span class="checkbox-text">Lec 12</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="13" data-lecture="LEC_13"><span class="checkbox-text">Lec 13</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="14" data-lecture="LEC_14"><span class="checkbox-text">Lec 14</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="15" data-lecture="LEC_15"><span class="checkbox-text">Lec 15</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="16" data-lecture="LEC_16"><span class="checkbox-text">Lec 16</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="17" data-lecture="LEC_17"><span class="checkbox-text">Lec 17</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="18" data-lecture="LEC_18"><span class="checkbox-text">Lec 18</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="19" data-lecture="LEC_19"><span class="checkbox-text">Lec 19</span></label>
+                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="20" data-lecture="LEC_20"><span class="checkbox-text">Lec 20</span></label>
+                        </div>
+                        <button onclick="exportMultipleLectures()" class="export-button">
+                            Export Selected Lectures
+                        </button>
+                    </div>
+
+                    <!-- QR Selection for Doctor (Instructor) -->
+                    <div class="qr-selection-wrapper">
+                        <div class="section-label">Select Active QR Code</div>
+                        <div class="mode-status" id="mode-status">Status: No QR Selected</div>
+                        <div class="qr-radio-group">
+                            <label class="qr-radio-label">
+                                <input type="radio" name="qr-select" value="QR_1" onchange="selectQRCode('QR_1')">
+                                <span class="qr-radio-text">QR 1</span>
+                            </label>
+                            <label class="qr-radio-label">
+                                <input type="radio" name="qr-select" value="QR_2" onchange="selectQRCode('QR_2')">
+                                <span class="qr-radio-text">QR 2</span>
+                            </label>
+                            <label class="qr-radio-label">
+                                <input type="radio" name="qr-select" value="QR_3" onchange="selectQRCode('QR_3')">
+                                <span class="qr-radio-text">QR 3</span>
+                            </label>
+                            <label class="qr-radio-label">
+                                <input type="radio" name="qr-select" value="NONE" onchange="selectQRCode('NONE')">
+                                <span class="qr-radio-text">Disable All</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Students List -->
+                    <div class="section-label">Attendance</div>
+                    <div class="students-list" id="students-list">
+                        <div class="empty-list">No students registered yet</div>
+                    </div>
+                </div>
+            </div>
+
+        </div><!-- /.card -->
+    </div><!-- /.container -->
+
+    <script src="app.js"></script>
+
+    <script>
+        // Override showDoctorInterface to use new class names
+        const _origSignIn = document.getElementById('signin-btn');
+
+        // Fix: ensure all buttons get correct class on runtime
+        document.addEventListener('DOMContentLoaded', function() {
+            // Map old button text/onclick to new style
+            document.querySelectorAll('button').forEach(btn => {
+                if (!btn.style.background && !btn.classList.contains('btn-exit') && !btn.classList.contains('btn-secondary') && !btn.classList.contains('btn-green')) {
+                    btn.style.background = 'var(--accent)';
+                    btn.style.color = 'var(--ink)';
+                    btn.style.fontFamily = 'var(--font-display)';
+                    btn.style.fontWeight = '800';
+                }
+            });
+        });
+    </script>
+</body>
+</html>

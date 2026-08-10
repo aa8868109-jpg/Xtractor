@@ -1,0 +1,19 @@
+.vercel
+.env
+.env.local
+.env*.local
+
+# Backend
+backend.log
+__pycache__/
+*.py[cod]
+*.so
+.Python
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
