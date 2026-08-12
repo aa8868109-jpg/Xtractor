@@ -1,0 +1,8 @@
+========================================
+تطبيق الحضور الذكي Xtractor
+========================================
+
+جاري تشغيل الخادم...
+
+Checking for .env (will copy from .env.example if missing)...
+... was unexpected at this time.
