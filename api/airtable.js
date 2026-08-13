@@ -34,10 +34,12 @@ module.exports = async function (req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   try {
     // Expect path like /api/airtable/:baseId/:tableOrPath
-    const incoming = req.path || req.url || req.originalUrl || '';
-    // strip leading /api/airtable/
     const prefix = '/api/airtable/';
-    let tail = incoming.startsWith(prefix) ? incoming.slice(prefix.length) : '';
+    // Parse URL safely to separate pathname and querystring
+    const host = req.headers.host || 'localhost';
+    const fullUrl = new URL(req.url, `http://${host}`);
+    const pathname = fullUrl.pathname || req.url || '';
+    let tail = pathname.startsWith(prefix) ? pathname.slice(prefix.length) : '';
     // If tail is empty, return 400
     if (!tail) return res.status(400).json({ error: 'Missing baseId in path' });
 
@@ -46,8 +48,8 @@ module.exports = async function (req, res) {
     const baseId = parts.shift();
     const targetPath = parts.join('/') || '';
 
-    // Preserve query string
-    const query = req.url.split('?')[1] || '';
+    // Preserve query string (already separated)
+    const query = fullUrl.searchParams.toString();
     const targetUrl = `https://api.airtable.com/v0/${baseId}/${targetPath}${query ? '?' + query : ''}`;
 
     const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
