@@ -1131,8 +1131,17 @@ async function loadServerConfig() {
 
 // Intercept direct Airtable URLs and route them through local proxy so keys are never exposed
 if (typeof axios !== 'undefined' && axios.interceptors) {
-    axios.interceptors.request.use(function (config) {
+    axios.interceptors.request.use(async function (config) {
         try {
+            // Ensure we have BASE_ID loaded before rewriting Airtable URLs
+            if (!BASE_ID) {
+                try {
+                    await loadServerConfig();
+                } catch (e) {
+                    // ignore - will attempt to proceed and may fail later
+                }
+            }
+
             const url = config.url || '';
             const prefix = 'https://api.airtable.com/v0/';
             if (url.startsWith(prefix)) {
