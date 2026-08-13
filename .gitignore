@@ -4,3 +4,4 @@
 .env.example
 .vercel
 .env*.local
+".env" 
