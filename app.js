@@ -1133,22 +1133,25 @@ async function loadServerConfig() {
 if (typeof axios !== 'undefined' && axios.interceptors) {
     axios.interceptors.request.use(async function (config) {
         try {
-            // Ensure we have BASE_ID loaded before rewriting Airtable URLs
-            if (!BASE_ID) {
-                try {
-                    await loadServerConfig();
-                } catch (e) {
-                    // ignore - will attempt to proceed and may fail later
-                }
-            }
-
             const url = config.url || '';
             const prefix = 'https://api.airtable.com/v0/';
+            // Only attempt to load server config when we're about to rewrite an Airtable URL
             if (url.startsWith(prefix)) {
                 const rest = url.slice(prefix.length); // baseId/rest/of/path
                 const parts = rest.split('/');
-                const baseId = parts.shift();
+                let baseId = parts.shift();
                 const path = parts.join('/');
+
+                // If the request used a placeholder like 'null' or 'undefined', reload config
+                if (!baseId || baseId === 'null' || baseId === 'undefined') {
+                    try {
+                        await loadServerConfig();
+                    } catch (e) {
+                        // ignore
+                    }
+                    // prefer loaded BASE_ID if available
+                    if (BASE_ID) baseId = BASE_ID;
+                }
                 // preserve querystring
                 const qsIndex = url.indexOf('?');
                 const qs = qsIndex !== -1 ? url.slice(qsIndex) : '';
