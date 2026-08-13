@@ -21,6 +21,40 @@ let lockMessage = '';
 let lockLink = '';
 let doctorPassword = '';
 
+// Safe localStorage wrapper to handle Tracking Prevention (some browsers block access)
+const __memoryFallbackStorage = {};
+function safeLocalGet(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch (e) {
+        console.warn('Tracking Prevention blocked localStorage.getItem for', key);
+        return __memoryFallbackStorage.hasOwnProperty(key) ? __memoryFallbackStorage[key] : null;
+    }
+}
+function safeLocalSet(key, value) {
+    try {
+        localStorage.setItem(key, value);
+    } catch (e) {
+        console.warn('Tracking Prevention blocked localStorage.setItem for', key);
+        __memoryFallbackStorage[key] = String(value);
+    }
+}
+function safeLocalRemove(key) {
+    try {
+        localStorage.removeItem(key);
+    } catch (e) {
+        console.warn('Tracking Prevention blocked localStorage.removeItem for', key);
+        delete __memoryFallbackStorage[key];
+    }
+}
+function safeLocalKeys() {
+    try {
+        return Object.keys(localStorage);
+    } catch (e) {
+        return Object.keys(__memoryFallbackStorage);
+    }
+}
+
 // Variable to control using mock data or real data
 const USE_MOCK_DATA = false; // تعيين true لاستخدام بيانات محاكاة، false لـ Airtable الحقيقي
 
@@ -34,11 +68,11 @@ let MOCK_LECTURES = {};
  * Initialize mock data from localStorage
  */
 function initMockData() {
-    // Clean old data from localStorage
-    localStorage.removeItem('deviceIdentifier');
-    localStorage.removeItem('device-id');
+    // Clean old data from localStorage (safe)
+    safeLocalRemove('deviceIdentifier');
+    safeLocalRemove('device-id');
     
-    const stored = localStorage.getItem('mock_lectures');
+    const stored = safeLocalGet('mock_lectures');
     if (stored) {
         MOCK_LECTURES = JSON.parse(stored);
     }
@@ -48,7 +82,7 @@ function initMockData() {
  * Save mock data to localStorage
  */
 function saveMockData() {
-    localStorage.setItem('mock_lectures', JSON.stringify(MOCK_LECTURES));
+    safeLocalSet('mock_lectures', JSON.stringify(MOCK_LECTURES));
 }
 
 /**
@@ -89,8 +123,8 @@ const REGION_TOLERANCE = 0.00015;
 let currentMode = null; // 'student' or 'doctor'
 let currentStudentCode = null;
 let currentStudentName = null; // To save student name
-let currentLectureNumber = localStorage.getItem('selectedLecture'); // Load from localStorage
-let lectureSelected = localStorage.getItem('lectureSelected') === 'true'; // Load from localStorage
+let currentLectureNumber = safeLocalGet('selectedLecture'); // Load from localStorage (safe)
+let lectureSelected = safeLocalGet('lectureSelected') === 'true'; // Load from localStorage (safe)
 let monitoringInterval = null; // 🎯 To monitor Student Mode changes
 let studentLocation = null;
 let qrScanner = null;
@@ -239,10 +273,10 @@ function startWebsiteLockMonitoring() {
  */
 async function getSelectedLectureFromMode() {
     try {
-        if (USE_MOCK_DATA) {
-            // في حالة البيانات الوهمية، استخدم localStorage
-            const qr = localStorage.getItem('selectedQR') || 'NONE';
-            const lecture = localStorage.getItem('selectedLecture');
+            if (USE_MOCK_DATA) {
+            // في حالة البيانات الوهمية، استخدم التخزين الآمن
+            const qr = safeLocalGet('selectedQR') || 'NONE';
+            const lecture = safeLocalGet('selectedLecture');
             
             // تحقق من أن QR محدد و المحاضرة موجودة
             if (qr !== 'NONE' && lecture) {
@@ -321,13 +355,13 @@ async function getSelectedLectureFromMode() {
  */
 async function updateStudentMode(lectureNumber, isEnabled) {
     try {
-        if (USE_MOCK_DATA) {
-            // في حالة البيانات الوهمية، استخدم localStorage
+                if (USE_MOCK_DATA) {
+            // في حالة البيانات الوهمية، استخدم التخزين الآمن
             if (isEnabled) {
-                localStorage.setItem('selectedLecture', lectureNumber);
-                localStorage.setItem('studentMode', 'ON');
+                safeLocalSet('selectedLecture', lectureNumber);
+                safeLocalSet('studentMode', 'ON');
             } else {
-                localStorage.setItem('studentMode', 'OFF');
+                safeLocalSet('studentMode', 'OFF');
             }
             return true;
         }
@@ -452,15 +486,15 @@ async function selectQRCode(qrValue) {
  */
 async function updateSelectedQR(lectureNumber, qrValue) {
     try {
-        if (USE_MOCK_DATA) {
-            // في حالة البيانات الوهمية، استخدم localStorage
+                if (USE_MOCK_DATA) {
+            // في حالة البيانات الوهمية، استخدم التخزين الآمن
             if (qrValue !== 'NONE') {
-                localStorage.setItem('selectedLecture', lectureNumber);
-                localStorage.setItem('selectedQR', qrValue);
-                localStorage.setItem('studentMode', 'ON');
+                safeLocalSet('selectedLecture', lectureNumber);
+                safeLocalSet('selectedQR', qrValue);
+                safeLocalSet('studentMode', 'ON');
             } else {
-                localStorage.setItem('selectedQR', 'NONE');
-                localStorage.setItem('studentMode', 'OFF');
+                safeLocalSet('selectedQR', 'NONE');
+                safeLocalSet('studentMode', 'OFF');
             }
             return true;
         }
@@ -531,7 +565,7 @@ async function getSelectedQRFromMode() {
     try {
         if (USE_MOCK_DATA) {
             // في حالة البيانات الوهمية، استخدم localStorage
-            const qr = localStorage.getItem('selectedQR') || 'NONE';
+            const qr = safeLocalGet('selectedQR') || 'NONE';
             console.log(`📋 Loaded QR from localStorage: ${qr}`);
             return qr;
         }
@@ -590,7 +624,7 @@ async function getSelectedQRFromMode() {
 async function updateQRSelectionDisplay() {
     try {
         if (USE_MOCK_DATA) {
-            const selectedQR = localStorage.getItem('selectedQR') || 'NONE';
+            const selectedQR = safeLocalGet('selectedQR') || 'NONE';
             const statusDiv = document.getElementById('mode-status');
             
             if (statusDiv) {
@@ -783,7 +817,7 @@ async function checkDeviceIPConflict(studentCode, lectureNumber) {
         if (USE_MOCK_DATA) {
             console.log('📋 فحص Mock Data...');
             // محاكاة جدول RAM
-            let mockRAM = JSON.parse(localStorage.getItem('mock_ram') || '{}');
+            let mockRAM = JSON.parse(safeLocalGet('mock_ram') || '{}');
             console.log('RAM Mock Data:', mockRAM);
             
             // ✅ الفحص الأول: إذا كان هناك IP مسجل في RAM مع كود مختلف
@@ -828,8 +862,8 @@ async function checkDeviceIPConflict(studentCode, lectureNumber) {
         // ✅ الفحص الأول: البحث في جدول المحاضرة عن IP (هل مسجل برمز مختلف؟)
         console.log(`🔍 الفحص الأول - فحص جدول ${tableName} عن IP: ${currentIP}`);
         const lectureResponseByIP = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=({Device IP}='${currentIP}')`,
-            { headers: getAirtableHeaders() }
+            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}`,
+            { headers: getAirtableHeaders(), params: { filterByFormula: `({Device IP}='${currentIP}')` } }
         );
 
         console.log('فحص IP في جدول المحاضرة:', lectureResponseByIP.data.records.length, 'records');
@@ -851,8 +885,8 @@ async function checkDeviceIPConflict(studentCode, lectureNumber) {
         // ✅ الفحص الثاني: البحث عن رمز الطالب (هل عنده IP مختلف مسجل؟)
         console.log(`🔍 الفحص الثاني - فحص جدول ${tableName} عن رمز الطالب: ${studentCode}`);
         const lectureResponseByCode = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
+            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}`,
+            { headers: getAirtableHeaders(), params: { filterByFormula: `({Code}='${studentCode}')` } }
         );
 
         console.log('فحص الكود في جدول المحاضرة:', lectureResponseByCode.data.records.length, 'records');
@@ -1204,8 +1238,8 @@ async function findStudent(studentCode) {
 
     try {
         const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(STUDENTS_TABLE)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
+            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(STUDENTS_TABLE)}`,
+            { headers: getAirtableHeaders(), params: { filterByFormula: `({Code}='${studentCode}')` } }
         );
 
         const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
@@ -1247,8 +1281,8 @@ async function saveDeviceIPForStudent(studentCode, lectureNumber) {
 
         // Search for student record in Airtable
         const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
+            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}`,
+            { headers: getAirtableHeaders(), params: { filterByFormula: `({Code}='${studentCode}')` } }
         );
 
         const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
@@ -1320,8 +1354,8 @@ async function updateStudentAttendance(studentCode, lectureNumber, tableName, co
         
         // Real Airtable code
         const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
+            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}`,
+            { headers: getAirtableHeaders(), params: { filterByFormula: `({Code}='${studentCode}')` } }
         );
 
         const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
@@ -1464,8 +1498,8 @@ async function updateStudentLocation(studentCode, lectureNumber) {
         
         // Real Airtable code
         const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
+            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}`,
+            { headers: getAirtableHeaders(), params: { filterByFormula: `({Code}='${studentCode}')` } }
         );
 
         const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
@@ -1559,8 +1593,8 @@ async function loadStudentScannedQRs(studentCode, lectureNumber, tableName) {
         
         // قراءة من Airtable الحقيقي
         const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
+            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}`,
+            { headers: getAirtableHeaders(), params: { filterByFormula: `({Code}='${studentCode}')` } }
         );
 
         if (response.data.records.length === 0) {
@@ -1959,8 +1993,8 @@ async function selectLecture() {
     lectureSelected = true;
 
     // Save to localStorage as well
-    localStorage.setItem('selectedLecture', lectureNumber);
-    localStorage.setItem('lectureSelected', 'true');
+    safeLocalSet('selectedLecture', lectureNumber);
+    safeLocalSet('lectureSelected', 'true');
 
     // Display lecture information
     document.getElementById('current-lecture').textContent = `Lec ${lectureNumber}`;
@@ -2003,7 +2037,7 @@ function startStudentModeMonitoring() {
 async function checkStudentModeStatus() {
     try {
         if (USE_MOCK_DATA) {
-            const studentMode = localStorage.getItem('studentMode');
+            const studentMode = safeLocalGet('studentMode');
             if (studentMode === 'OFF' && currentMode === 'student') {
                 console.warn('⚠️ Mock: Student mode stopped! - Closing page...');
                 showAlert('⛔ Student mode disabled by instructor - Exiting', 'warning');
@@ -2603,8 +2637,8 @@ async function findStudent(studentCode) {
     try {
         // البحث في جدول الطلاب الأساسي (STUDENTS_TABLE)
         const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(STUDENTS_TABLE)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
+            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(STUDENTS_TABLE)}`,
+            { headers: getAirtableHeaders(), params: { filterByFormula: `({Code}='${studentCode}')` } }
         );
         
         return response.data.records.length > 0 ? response.data.records[0] : null;
@@ -2639,18 +2673,19 @@ function startContinuousLocationTracking() {
  * Initialize application on page load
  */
 document.addEventListener('DOMContentLoaded', async function() {
-    // Comprehensive cleanup of old localStorage data
-    localStorage.removeItem('deviceIdentifier');
-    localStorage.removeItem('device-id');
-    localStorage.removeItem('device_ip');
-    localStorage.removeItem('cached_ip');
+    // Comprehensive cleanup of old localStorage data (safe)
+    safeLocalRemove('deviceIdentifier');
+    safeLocalRemove('device-id');
+    safeLocalRemove('device_ip');
+    safeLocalRemove('cached_ip');
     
     // Delete any key containing "device", "local", or "ip"
-    for (let key in localStorage) {
+    const keys = safeLocalKeys();
+    keys.forEach((key) => {
         if (key.includes('device') || key.includes('local') || key.includes('ip') || key.match(/^local-|^device-/)) {
-            localStorage.removeItem(key);
+            safeLocalRemove(key);
         }
-    }
+    });
     
     // Initialize mock data
     initMockData();
