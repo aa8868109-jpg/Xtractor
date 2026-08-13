@@ -6,7 +6,9 @@
 
 // Airtable Data
 // API keys moved to the server proxy. Do NOT store keys in client-side code.
-const BASE_ID = 'appJODvoKvvQvRebj';
+// `BASE_ID` is loaded at runtime from a server endpoint (`/api/config`) so
+// it can be provided via Vercel environment variables. Falls back to null.
+let BASE_ID = null;
 const STUDENTS_TABLE = 'LEC_1';
 const MODE_TABLE = 'MODE'; // Mode control table (ON/OFF and lecture number)
 const MODE_RECORD_NAME = 'Xtractor Website'; // Name of the only record in MODE table
@@ -259,19 +261,21 @@ async function getSelectedLectureFromMode() {
             { headers: getAirtableHeaders() }
         );
 
-        console.log('📋 عدد السجلات المتاحة:', response.data.records.length);
+        const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
 
-        if (response.data.records.length > 0) {
+        console.log('📋 عدد السجلات المتاحة:', records.length);
+
+        if (records.length > 0) {
             // البحث عن السجل الصحيح - مع معالجة مرنة لأنواع البيانات
-            let record = response.data.records.find(r => {
+            let record = records.find(r => {
                 const name = r.fields.Name || '';
                 return name.trim() === MODE_RECORD_NAME.trim();
             });
             
             // إذا لم نجده، جرب البحث عن أول سجل إذا كان هناك واحد فقط
-            if (!record && response.data.records.length === 1) {
+            if (!record && records.length === 1) {
                 console.warn('⚠️ تم استخدام السجل الوحيد في الجدول');
-                record = response.data.records[0];
+                record = records[0];
             }
             
             if (record) {
@@ -291,7 +295,7 @@ async function getSelectedLectureFromMode() {
             } else {
                 console.error(`❌ لم يتم العثور على سجل باسم "${MODE_RECORD_NAME}"`);
                 console.log('أسماء السجلات المتاحة:');
-                response.data.records.forEach((r, idx) => {
+                records.forEach((r, idx) => {
                     console.log(`  ${idx + 1}. "${r.fields.Name || '(فارغ)'}" - Student Mode: ${r.fields['Student Mode']} - Lecture: ${r.fields.Lecture} - QR: ${r.fields['QR Selected'] || 'NONE'}`);
                 });
             }
@@ -335,30 +339,32 @@ async function updateStudentMode(lectureNumber, isEnabled) {
             { headers: getAirtableHeaders() }
         );
 
-        console.log('📋 عدد السجلات المتاحة:', response.data.records.length);
+        const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
 
-        if (response.data.records.length === 0) {
+        console.log('📋 عدد السجلات المتاحة:', records.length);
+
+        if (records.length === 0) {
             console.error('❌ No records found in MODE table');
             showAlert('❌ MODE table is empty or not found', 'error');
             return false;
         }
 
         // Search for the correct record - with flexible handling
-        let record = response.data.records.find(r => {
+        let record = records.find(r => {
             const name = r.fields.Name || '';
             return name.trim() === MODE_RECORD_NAME.trim();
         });
         
         // If not found, try searching for first record if there's only one
-        if (!record && response.data.records.length === 1) {
+        if (!record && records.length === 1) {
             console.warn('⚠️ Using the only record in the table');
-            record = response.data.records[0];
+            record = records[0];
         }
         
         if (!record) {
             console.error(`❌ Record with name "${MODE_RECORD_NAME}" not found`);
             console.log('Available record names:');
-            response.data.records.forEach((r, idx) => {
+            records.forEach((r, idx) => {
                 console.log(`  ${idx + 1}. "${r.fields.Name || '(empty)'}" - ID: ${r.id}`);
             });
             showAlert(`❌ Record "${MODE_RECORD_NAME}" not found in MODE table`, 'error');
@@ -466,21 +472,23 @@ async function updateSelectedQR(lectureNumber, qrValue) {
             { headers: getAirtableHeaders() }
         );
 
-        if (response.data.records.length === 0) {
+        const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
+
+        if (records.length === 0) {
             console.error('❌ No records found in MODE table');
             showAlert('❌ MODE table is empty or not found', 'error');
             return false;
         }
 
         // Search for the correct record
-        let record = response.data.records.find(r => {
+        let record = records.find(r => {
             const name = r.fields.Name || '';
             return name.trim() === MODE_RECORD_NAME.trim();
         });
         
-        if (!record && response.data.records.length === 1) {
+        if (!record && records.length === 1) {
             console.warn('⚠️ Using the only record in the table');
-            record = response.data.records[0];
+            record = records[0];
         }
         
         if (!record) {
@@ -535,16 +543,18 @@ async function getSelectedQRFromMode() {
             { headers: getAirtableHeaders() }
         );
 
-        if (response.data.records.length > 0) {
+        const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
+
+        if (records.length > 0) {
             // البحث عن السجل الصحيح
-            let record = response.data.records.find(r => {
+            let record = records.find(r => {
                 const name = r.fields.Name || '';
                 return name.trim() === MODE_RECORD_NAME.trim();
             });
             
-            if (!record && response.data.records.length === 1) {
+            if (!record && records.length === 1) {
                 console.warn('⚠️ تم استخدام السجل الوحيد في الجدول');
-                record = response.data.records[0];
+                record = records[0];
             }
             
             if (record) {
@@ -606,12 +616,15 @@ async function updateQRSelectionDisplay() {
             { headers: getAirtableHeaders() }
         );
 
-        if (response.data.records.length === 0) return;
+        // Defensive: ensure response structure is valid
+        const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
 
-        let record = response.data.records.find(r => {
+        if (records.length === 0) return;
+
+        let record = records.find(r => {
             const name = r.fields.Name || '';
             return name.trim() === MODE_RECORD_NAME.trim();
-        }) || response.data.records[0];
+        }) || records[0];
 
         if (!record) return;
 
@@ -1094,6 +1107,28 @@ function getAirtableHeaders() {
     return { 'Content-Type': 'application/json' };
 }
 
+/**
+ * Load server-side config (provided via environment variables on Vercel)
+ * Expected response: { BASE_ID: 'appXXXXX' }
+ */
+async function loadServerConfig() {
+    try {
+        if (typeof axios === 'undefined') return;
+        const resp = await axios.get(`${API_PROXY_BASE}/api/config`);
+        if (resp && resp.data) {
+                console.log('🔎 /api/config response (client):', resp.data);
+            if (resp.data.BASE_ID) {
+                BASE_ID = resp.data.BASE_ID;
+                console.log('✓ Loaded BASE_ID from server config');
+            } else {
+                console.warn('⚠️ Server config returned but BASE_ID not set');
+            }
+        }
+    } catch (error) {
+        console.warn('⚠️ Could not load server config:', error?.response?.data || error.message || error);
+    }
+}
+
 // Intercept direct Airtable URLs and route them through local proxy so keys are never exposed
 if (typeof axios !== 'undefined' && axios.interceptors) {
     axios.interceptors.request.use(function (config) {
@@ -1134,8 +1169,9 @@ async function findStudent(studentCode) {
             { headers: getAirtableHeaders() }
         );
 
-        if (response.data.records.length > 0) {
-            return response.data.records[0];
+        const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
+        if (records.length > 0) {
+            return records[0];
         }
         return null;
     } catch (error) {
@@ -1176,9 +1212,10 @@ async function saveDeviceIPForStudent(studentCode, lectureNumber) {
             { headers: getAirtableHeaders() }
         );
 
-        if (response.data.records.length > 0) {
+        const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
+        if (records.length > 0) {
             // ✅ Update existing record
-            const recordId = response.data.records[0].id;
+            const recordId = records[0].id;
             await axios.patch(
                 `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}/${recordId}`,
                 {
@@ -1248,7 +1285,8 @@ async function updateStudentAttendance(studentCode, lectureNumber, tableName, co
             { headers: getAirtableHeaders() }
         );
 
-        if (response.data.records.length === 0) {
+        const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
+        if (records.length === 0) {
             console.error('❌ Student not found in lecture table');
             return null;
         }
@@ -1256,7 +1294,7 @@ async function updateStudentAttendance(studentCode, lectureNumber, tableName, co
         // Create Google Maps link from coordinates
         const mapsLink = `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`;
         
-        const studentRecord = response.data.records[0];
+        const studentRecord = records[0];
         const recordId = studentRecord.id;
         
         // Determine Region based on student location
@@ -1352,7 +1390,8 @@ async function addStudentToLecture(studentCode, lectureNumber, tableName) {
         );
 
         console.log(`✓ تم إضافة الطالب ${studentCode} إلى جدول ${tableName} مع Device IP`);
-        return response.data.records[0];
+        const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
+        return records.length > 0 ? records[0] : null;
     } catch (error) {
         console.error('خطأ في إضافة طالب جديد:', error);
         return null;
@@ -1390,8 +1429,9 @@ async function updateStudentLocation(studentCode, lectureNumber) {
             { headers: getAirtableHeaders() }
         );
 
-        if (response.data.records.length > 0) {
-            const recordId = response.data.records[0].id;
+        const records = (response && response.data && Array.isArray(response.data.records)) ? response.data.records : [];
+        if (records.length > 0) {
+            const recordId = records[0].id;
             const regionStatus = checkGeographicRegion();
             
             await axios.patch(
@@ -1439,6 +1479,12 @@ async function fetchLectureStudents(lectureNumber) {
             `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}`,
             { headers: getAirtableHeaders() }
         );
+
+        // Defensive: ensure response structure is valid
+        if (!response || !response.data || !Array.isArray(response.data.records)) {
+            console.warn('⚠️ Unexpected response from Airtable while fetching students', response);
+            return [];
+        }
 
         return response.data.records;
     } catch (error) {
@@ -2562,6 +2608,21 @@ document.addEventListener('DOMContentLoaded', async function() {
     
     // 🔐 Check Website Protection Status FIRST (one-time check)
     showAlert('🔐 Verifying website access...', 'info');
+
+    // Load server-provided config (e.g. BASE_ID) before making Airtable calls
+    try {
+        await loadServerConfig();
+    } catch (e) {
+        console.warn('⚠️ loadServerConfig failed:', e);
+    }
+
+    if (!BASE_ID) {
+        console.error('❌ BASE_ID is not configured on the server. Aborting initialization.');
+        showAlert('❌ Server configuration missing BASE_ID. Contact admin.', 'error');
+        showLockedWebsite();
+        return;
+    }
+
     const protectionOK = await checkWebsiteProtectionStatus();
     
     if (!protectionOK) {

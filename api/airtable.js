@@ -28,6 +28,10 @@ async function fetchWithRetry(config, maxRetries = 3) {
 }
 
 module.exports = async function (req, res) {
+  // CORS for browser clients
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).end();
   try {
     // Expect path like /api/airtable/:baseId/:tableOrPath
     const incoming = req.path || req.url || req.originalUrl || '';
@@ -64,10 +68,13 @@ module.exports = async function (req, res) {
     };
 
     const response = await fetchWithRetry(config, 3);
+    // Ensure we return JSON content-type
+    res.setHeader('Content-Type', 'application/json');
     return res.status(response.status).json(response.data);
   } catch (err) {
     const status = err.response?.status || 500;
     console.error('Airtable proxy error:', err.response?.data || err.message || err);
+    res.setHeader('Content-Type', 'application/json');
     return res.status(status).json({ error: 'Airtable proxy error', details: err.response?.data || err.message });
   }
 };
