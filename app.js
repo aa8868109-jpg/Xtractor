@@ -1159,6 +1159,30 @@ if (typeof axios !== 'undefined' && axios.interceptors) {
                 // remove any auth header that might exist
                 if (config.headers) delete config.headers['Authorization'];
             }
+            // Also handle requests already targeted at the local proxy that may contain 'null' as baseId
+            const proxyPrefix = `${API_PROXY_BASE}/api/airtable/`;
+            if (url.startsWith(proxyPrefix)) {
+                try {
+                    const after = url.slice(proxyPrefix.length); // baseId/rest...
+                    const parts = after.split('/');
+                    let baseId = parts.shift();
+                    const restPath = parts.join('/');
+                    if (!baseId || baseId === 'null' || baseId === 'undefined') {
+                        try {
+                            await loadServerConfig();
+                        } catch (e) {}
+                        if (BASE_ID) baseId = BASE_ID;
+                    }
+                    // rebuild url if we substituted baseId
+                    if (baseId && baseId !== 'null' && baseId !== 'undefined') {
+                        const qsIndex = url.indexOf('?');
+                        const qs = qsIndex !== -1 ? url.slice(qsIndex) : '';
+                        config.url = `${proxyPrefix}${baseId}/${restPath}${qs}`;
+                    }
+                } catch (e) {
+                    // ignore
+                }
+            }
         } catch (e) {
             // ignore
         }
