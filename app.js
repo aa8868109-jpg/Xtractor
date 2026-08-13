@@ -1160,10 +1160,11 @@ if (typeof axios !== 'undefined' && axios.interceptors) {
                 if (config.headers) delete config.headers['Authorization'];
             }
             // Also handle requests already targeted at the local proxy that may contain 'null' as baseId
-            const proxyPrefix = `${API_PROXY_BASE}/api/airtable/`;
-            if (url.startsWith(proxyPrefix)) {
+            const proxyPath = '/api/airtable/';
+            const proxyIdx = url.indexOf(proxyPath);
+            if (proxyIdx !== -1) {
                 try {
-                    const after = url.slice(proxyPrefix.length); // baseId/rest...
+                    const after = url.slice(proxyIdx + proxyPath.length); // baseId/rest...
                     const parts = after.split('/');
                     let baseId = parts.shift();
                     const restPath = parts.join('/');
@@ -1177,7 +1178,9 @@ if (typeof axios !== 'undefined' && axios.interceptors) {
                     if (baseId && baseId !== 'null' && baseId !== 'undefined') {
                         const qsIndex = url.indexOf('?');
                         const qs = qsIndex !== -1 ? url.slice(qsIndex) : '';
-                        config.url = `${proxyPrefix}${baseId}/${restPath}${qs}`;
+                        // Preserve origin if present
+                        const origin = url.slice(0, proxyIdx);
+                        config.url = `${origin}${proxyPath}${baseId}/${restPath}${qs}`;
                     }
                 } catch (e) {
                     // ignore
