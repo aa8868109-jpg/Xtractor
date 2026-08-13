@@ -1936,24 +1936,41 @@ async function selectLecture() {
         return;
     }
 
-    showAlert('Loading lecture settings...', 'info');
+    showAlert('Activating lecture on server...', 'info');
 
+    // Ensure BASE_ID is loaded before attempting server updates
+    if (!BASE_ID) {
+        try {
+            await loadServerConfig();
+        } catch (e) {
+            console.warn('⚠️ Failed loading server config before activating lecture:', e);
+        }
+    }
+
+    // Update MODE table on the server to enable Student Mode and set Lecture
+    const activated = await updateStudentMode(lectureNumber, true);
+    if (!activated) {
+        showAlert('❌ Failed to activate lecture on server. Check MODE table and try again.', 'error');
+        return;
+    }
+
+    // Local state + UI updates only after server-side activation succeeds
     currentLectureNumber = lectureNumber;
     lectureSelected = true;
-    
+
     // Save to localStorage as well
     localStorage.setItem('selectedLecture', lectureNumber);
     localStorage.setItem('lectureSelected', 'true');
-    
+
     // Display lecture information
     document.getElementById('current-lecture').textContent = `Lec ${lectureNumber}`;
     document.getElementById('lecture-info').style.display = 'block';
-    
+
     // Load QR selection status for this lecture
     await updateQRSelectionDisplay();
-    
-    showAlert(`✓ Lecture ${lectureNumber} loaded - Select a QR code to enable`, 'success');
-    
+
+    showAlert(`✓ Lecture ${lectureNumber} activated - Select a QR code to enable`, 'success');
+
     // Start updating student list
     startLectureStudentUpdates();
 }
