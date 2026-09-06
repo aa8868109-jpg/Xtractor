@@ -77,9 +77,6 @@ const GEO_BOUNDARIES = [
     { lat: 29.9817190, lng: 31.2332451 }  // الإحداثي السفلي
 ];
 
-// Special Doctor Code (will be read from Protection table)
-let DOCTOR_CODE = '13634';
-
 // Geographic tolerance constant - approximately 15 meters
 const REGION_TOLERANCE = 0.00015;
 
@@ -415,6 +412,18 @@ async function getSelectedLectureFromMode() {
             { headers: getAirtableHeaders() }
         );
 
+        // Defensive: ensure we received JSON with records array
+        if (!response || !response.data || !Array.isArray(response.data.records)) {
+            console.error('⚠️ Unexpected response from MODE endpoint (not JSON records)', response && response.data);
+            const bodyText = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
+            if (bodyText && bodyText.trim().startsWith('<')) {
+                showAlert('❌ Server returned HTML instead of API JSON. Try clearing Vercel CDN or re-deploy.', 'error');
+            } else {
+                showAlert('❌ Unexpected response from MODE endpoint', 'error');
+            }
+            return null;
+        }
+
         console.log('📋 عدد السجلات المتاحة:', response.data.records.length);
 
         if (response.data.records.length > 0) {
@@ -490,6 +499,13 @@ async function updateStudentMode(lectureNumber, isEnabled) {
             `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(MODE_TABLE)}`,
             { headers: getAirtableHeaders() }
         );
+
+        // Defensive: validate response structure
+        if (!response || !response.data || !Array.isArray(response.data.records)) {
+            console.error('❌ Invalid response from MODE endpoint when updating student mode', response && response.data);
+            showAlert('❌ MODE table response invalid', 'error');
+            return false;
+        }
 
         console.log('📋 عدد السجلات المتاحة:', response.data.records.length);
 
@@ -622,9 +638,10 @@ async function updateSelectedQR(lectureNumber, qrValue) {
             { headers: getAirtableHeaders() }
         );
 
-        if (response.data.records.length === 0) {
-            console.error('❌ No records found in MODE table');
-            showAlert('❌ MODE table is empty or not found', 'error');
+        // Defensive: ensure records exists
+        if (!response || !response.data || !Array.isArray(response.data.records) || response.data.records.length === 0) {
+            console.error('❌ No records found or invalid response from MODE table', response && response.data);
+            showAlert('❌ MODE table is empty or response invalid', 'error');
             return false;
         }
 
@@ -703,6 +720,11 @@ async function getSelectedQRFromMode() {
             { headers: getAirtableHeaders() }
         );
 
+        if (!response || !response.data || !Array.isArray(response.data.records) || response.data.records.length === 0) {
+            console.error('❌ Invalid MODE response when getting selected QR', response && response.data);
+            return 'NONE';
+        }
+
         if (response.data.records.length > 0) {
             // البحث عن السجل الصحيح
             let record = response.data.records.find(r => {
@@ -780,7 +802,18 @@ async function updateQRSelectionDisplay() {
             { headers: getAirtableHeaders() }
         );
 
-        if (response.data.records.length === 0) return;
+        // Defensive check: ensure we received JSON with records array
+        if (!response || !response.data || !Array.isArray(response.data.records)) {
+            console.error('⚠️ Unexpected response from MODE endpoint (not JSON records)');
+            // If HTML returned (e.g., index.html), show a clear alert for the user
+            const bodyText = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
+            if (bodyText && bodyText.trim().startsWith('<')) {
+                showAlert('❌ Server returned HTML instead of API JSON. Try clearing Vercel CDN or re-deploy.', 'error');
+            } else {
+                showAlert('❌ Unexpected response from MODE endpoint', 'error');
+            }
+            return;
+        }
 
         let record = response.data.records.find(r => {
             const name = r.fields.Name || '';
