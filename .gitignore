@@ -1,2 +1,7 @@
-.env 
-node_modules 
+.env
+node_modules
+.venv
+.vercel
+install.log
+*.log
+vendor/
