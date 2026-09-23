@@ -3,10 +3,14 @@ const admin = require('firebase-admin');
 function loadServiceAccount() {
     if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
         const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON.trim();
-        const serviceAccount = JSON.parse(raw);
+        let serviceAccount = JSON.parse(raw);
+        if (typeof serviceAccount === 'string') {
+            serviceAccount = JSON.parse(serviceAccount);
+        }
         if (!serviceAccount.project_id || !serviceAccount.client_email || !serviceAccount.private_key) {
             throw new Error('Firebase service account JSON is missing required fields');
         }
+        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
         return serviceAccount;
     }
 
