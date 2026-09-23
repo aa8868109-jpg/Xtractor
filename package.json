@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "description": "Xtractor Vercel app backed by Firestore",
   "dependencies": {
-    "firebase-admin": "^11.10.0"
+    "firebase-admin": "^14.5.0"
   }
 }
