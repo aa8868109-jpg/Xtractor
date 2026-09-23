@@ -2,7 +2,7 @@ const { getFirestore } = require('./firebase');
 
 // Simple in-memory cache — per-instance, short TTL
 const CACHE_TTL_MS = 30 * 1000;
-const API_VERSION = 'firebase-runtime-v3';
+const API_VERSION = 'firebase-runtime-v4';
 if (!global._protectionCache) global._protectionCache = { ts: 0, data: null };
 
 function classifyFirebaseError(error) {
@@ -20,6 +20,13 @@ function classifyFirebaseError(error) {
   }
   if (message.includes('not_found') || code === '5') return 'firestore_not_found';
   return 'firestore_fetch_failed';
+}
+
+function safeFirebaseDiagnostic(error) {
+  return {
+    name: String(error?.name || 'Error').slice(0, 80),
+    code: String(error?.code || 'unknown').slice(0, 80)
+  };
 }
 
 module.exports = async function handler(req, res) {
@@ -42,9 +49,9 @@ module.exports = async function handler(req, res) {
       return res.json({ success: true, used: 'firestore', data: global._protectionCache.data });
     } catch (err) {
       console.error('Protection handler firestore read error:', err && err.message ? err.message : err);
-      return res.status(500).json({ success: false, error: classifyFirebaseError(err), version: API_VERSION });
+      return res.status(500).json({ success: false, error: classifyFirebaseError(err), diagnostic: safeFirebaseDiagnostic(err), version: API_VERSION });
     }
   } catch (err) {
-    return res.status(500).json({ success: false, error: classifyFirebaseError(err), version: API_VERSION });
+    return res.status(500).json({ success: false, error: classifyFirebaseError(err), diagnostic: safeFirebaseDiagnostic(err), version: API_VERSION });
   }
 };
