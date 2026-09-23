@@ -29,17 +29,17 @@ function loadServiceAccount() {
             throw new Error('Firebase service account JSON is missing required fields');
         }
         return {
-            projectId: cleanEnvValue(serviceAccount.project_id),
-            clientEmail: cleanEnvValue(serviceAccount.client_email),
-            privateKey: normalizePrivateKey(serviceAccount.private_key)
+            project_id: cleanEnvValue(serviceAccount.project_id),
+            client_email: cleanEnvValue(serviceAccount.client_email),
+            private_key: normalizePrivateKey(serviceAccount.private_key)
         };
     }
 
     if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
         return {
-            projectId: cleanEnvValue(process.env.FIREBASE_PROJECT_ID),
-            clientEmail: cleanEnvValue(process.env.FIREBASE_CLIENT_EMAIL),
-            privateKey: normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY)
+            project_id: cleanEnvValue(process.env.FIREBASE_PROJECT_ID),
+            client_email: cleanEnvValue(process.env.FIREBASE_CLIENT_EMAIL),
+            private_key: normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY)
         };
     }
 
@@ -50,12 +50,20 @@ function getFirestore() {
     if (firestore) return firestore;
 
     let app;
+    const serviceAccount = loadServiceAccount();
+    let credential;
+    try {
+        credential = admin.credential.cert(serviceAccount);
+    } catch (error) {
+        error.firebasePhase = 'credential_cert';
+        throw error;
+    }
+
     try {
         if (!admin.apps.length) {
-            const serviceAccount = loadServiceAccount();
             app = admin.initializeApp({
-                credential: admin.credential.cert(serviceAccount),
-                projectId: serviceAccount.projectId
+                credential,
+                projectId: serviceAccount.project_id
             });
         } else {
             app = admin.app();
