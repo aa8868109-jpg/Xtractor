@@ -25,10 +25,18 @@ module.exports = async function handler(req, res) {
     } catch (err) {
       console.error('Protection handler firestore read error:', err && err.message ? err.message : err);
       const message = String(err?.message || '');
-      const error = message.includes('credentials') || message.includes('JSON') || message.includes('private key')
+      const normalizedMessage = message.toLowerCase();
+      const errorCode = String(err?.code || '').toLowerCase();
+      const error = normalizedMessage.includes('credentials') || normalizedMessage.includes('json') ||
+        normalizedMessage.includes('private key') || normalizedMessage.includes('invalid_grant') ||
+        normalizedMessage.includes('invalid pem') || normalizedMessage.includes('certificate') ||
+        errorCode.includes('auth')
         ? 'firebase_credentials_invalid'
-        : message.includes('permission') || message.includes('PERMISSION_DENIED')
+        : normalizedMessage.includes('permission') || normalizedMessage.includes('permission_denied') ||
+          errorCode === '7' || errorCode.includes('permission')
           ? 'firestore_permission_denied'
+          : normalizedMessage.includes('not_found') || errorCode === '5'
+            ? 'firestore_not_found'
           : 'firestore_fetch_failed';
       return res.status(500).json({ success: false, error });
     }
