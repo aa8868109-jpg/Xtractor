@@ -25,7 +25,8 @@ function classifyFirebaseError(error) {
 function safeFirebaseDiagnostic(error) {
   return {
     name: String(error?.name || 'Error').slice(0, 80),
-    code: String(error?.code || 'unknown').slice(0, 80)
+    code: String(error?.code || 'unknown').slice(0, 80),
+    message: String(error?.message || 'unknown').replace(/[\r\n]+/g, ' ').slice(0, 160)
   };
 }
 

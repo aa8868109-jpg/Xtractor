@@ -26,17 +26,18 @@ function loadServiceAccount() {
         if (!serviceAccount.project_id || !serviceAccount.client_email || !serviceAccount.private_key) {
             throw new Error('Firebase service account JSON is missing required fields');
         }
-        serviceAccount.project_id = cleanEnvValue(serviceAccount.project_id);
-        serviceAccount.client_email = cleanEnvValue(serviceAccount.client_email);
-        serviceAccount.private_key = normalizePrivateKey(serviceAccount.private_key);
-        return serviceAccount;
+        return {
+            projectId: cleanEnvValue(serviceAccount.project_id),
+            clientEmail: cleanEnvValue(serviceAccount.client_email),
+            privateKey: normalizePrivateKey(serviceAccount.private_key)
+        };
     }
 
     if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
         return {
-            project_id: cleanEnvValue(process.env.FIREBASE_PROJECT_ID),
-            client_email: cleanEnvValue(process.env.FIREBASE_CLIENT_EMAIL),
-            private_key: normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY)
+            projectId: cleanEnvValue(process.env.FIREBASE_PROJECT_ID),
+            clientEmail: cleanEnvValue(process.env.FIREBASE_CLIENT_EMAIL),
+            privateKey: normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY)
         };
     }
 
@@ -48,7 +49,7 @@ function getFirestore() {
         const serviceAccount = loadServiceAccount();
         admin.initializeApp({
             credential: admin.credential.cert(serviceAccount),
-            projectId: process.env.FIREBASE_PROJECT_ID || serviceAccount.project_id
+            projectId: serviceAccount.projectId
         });
     }
 
