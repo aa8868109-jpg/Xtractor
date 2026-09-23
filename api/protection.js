@@ -24,7 +24,13 @@ module.exports = async function handler(req, res) {
       return res.json({ success: true, used: 'firestore', data: global._protectionCache.data });
     } catch (err) {
       console.error('Protection handler firestore read error:', err && err.message ? err.message : err);
-      return res.status(500).json({ success: false, error: 'firestore_fetch_failed' });
+      const message = String(err?.message || '');
+      const error = message.includes('credentials') || message.includes('JSON') || message.includes('private key')
+        ? 'firebase_credentials_invalid'
+        : message.includes('permission') || message.includes('PERMISSION_DENIED')
+          ? 'firestore_permission_denied'
+          : 'firestore_fetch_failed';
+      return res.status(500).json({ success: false, error });
     }
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message || err });
