@@ -1,4 +1,6 @@
 const admin = require('firebase-admin');
+const { initializeFirestore } = require('firebase-admin/firestore');
+let firestore = null;
 
 function cleanEnvValue(value) {
     const cleaned = String(value || '').trim();
@@ -45,15 +47,21 @@ function loadServiceAccount() {
 }
 
 function getFirestore() {
+    if (firestore) return firestore;
+
+    let app;
     if (!admin.apps.length) {
         const serviceAccount = loadServiceAccount();
-        admin.initializeApp({
+        app = admin.initializeApp({
             credential: admin.credential.cert(serviceAccount),
             projectId: serviceAccount.projectId
         });
+    } else {
+        app = admin.app();
     }
 
-    return admin.firestore();
+    firestore = initializeFirestore(app, { preferRest: true });
+    return firestore;
 }
 
 module.exports = { getFirestore };
