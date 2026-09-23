@@ -1,4 +1,4 @@
-const admin = require('firebase-admin');
+const { cert, getApps, initializeApp } = require('firebase-admin/app');
 const { initializeFirestore } = require('firebase-admin/firestore');
 let firestore = null;
 
@@ -53,20 +53,20 @@ function getFirestore() {
     const serviceAccount = loadServiceAccount();
     let credential;
     try {
-        credential = admin.credential.cert(serviceAccount);
+        credential = cert(serviceAccount);
     } catch (error) {
         error.firebasePhase = 'credential_cert';
         throw error;
     }
 
     try {
-        if (!admin.apps.length) {
-            app = admin.initializeApp({
+        if (getApps().length === 0) {
+            app = initializeApp({
                 credential,
                 projectId: serviceAccount.project_id
             });
         } else {
-            app = admin.app();
+            app = getApps()[0];
         }
     } catch (error) {
         error.firebasePhase = 'admin_initialize';
