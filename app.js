@@ -4,12 +4,10 @@
 
 // ====== Basic Variables and Constants ======
 
-// Airtable Data
-// API keys moved to the server proxy. Do NOT store keys in client-side code.
-const BASE_ID = 'appJODvoKvvQvRebj';
+// Backend data is served from Firestore through the server proxy.
 const STUDENTS_TABLE = 'LEC_1';
 const MODE_TABLE = 'MODE'; // Mode control table (ON/OFF and lecture number)
-const MODE_RECORD_NAME = 'Xtractor Website'; // Name of the only record in MODE table
+const MODE_RECORD_NAME = 'Website Status'; // Must match the Firestore document name used in MODE collection
 
 // Proxy configuration (empty => same origin)
 const API_PROXY_BASE = '';
@@ -19,48 +17,7 @@ let lockMessage = '';
 let lockLink = '';
 let doctorPassword = '';
 
-// Variable to control using mock data or real data
-const USE_MOCK_DATA = false; // تعيين true لاستخدام بيانات محاكاة، false لـ Airtable الحقيقي
-
-// ====== Mock Data System ======
-
-
-// Mock storage for lecture tables
-let MOCK_LECTURES = {};
-
-/**
- * Initialize mock data from localStorage
- */
-function initMockData() {
-    // Clean old data from storage
-    safeStorage.removeItem('deviceIdentifier');
-    safeStorage.removeItem('device-id');
-    
-    const stored = safeStorage.getItem('mock_lectures');
-    if (stored) {
-        MOCK_LECTURES = JSON.parse(stored);
-    }
-}
-
-/**
- * Save mock data to localStorage
- */
-function saveMockData() {
-    safeStorage.setItem('mock_lectures', JSON.stringify(MOCK_LECTURES));
-}
-
-/**
- * Mock fetching data from Airtable
- */
-async function mockFetch(endpoint, method = 'GET', data = null) {
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 300));
-    
-    return {
-        status: 200,
-        data: data || {}
-    };
-}
+// Runtime traffic is routed through the Firestore proxy only.
 
 // ====== Pre-programmed QR Codes ======
 const QR_CODES = {
@@ -84,6 +41,7 @@ const REGION_TOLERANCE = 0.00015;
 let currentMode = null; // 'student' or 'doctor'
 let currentStudentCode = null;
 let currentStudentName = null; // To save student name
+let currentStudentRecord = null;
 // Safe storage wrapper: uses localStorage when available, falls back to in-memory object
 const _inMemoryStorage = {};
 // Detect localStorage availability once to avoid repeated browser blocking messages
@@ -115,6 +73,120 @@ const safeStorage = {
     }
 };
 
+// If localStorage is unavailable (Tracking Prevention), install safe shim
+function installLocalStorageShim() {
+    try {
+        if (_localStorageAvailable) return;
+        // Avoid double-patching
+        if (Storage.prototype.__xtractor_shim_installed__) return;
+
+        Storage.prototype.__xtractor_shim_installed__ = true;
+
+        Storage.prototype.getItem = function(key) {
+            return _inMemoryStorage[key] ?? null;
+        };
+        Storage.prototype.setItem = function(key, value) {
+            _inMemoryStorage[key] = String(value);
+        };
+        Storage.prototype.removeItem = function(key) {
+            delete _inMemoryStorage[key];
+        };
+        // Provide key() and length to be minimally compatible
+        Storage.prototype.key = function(i) {
+            const keys = Object.keys(_inMemoryStorage);
+            return keys[i] || null;
+        };
+        Object.defineProperty(Storage.prototype, 'length', {
+            get: function() { return Object.keys(_inMemoryStorage).length; }
+        });
+    } catch (e) {
+        // ignore shim errors
+    }
+}
+
+// Ensure shim is installed early if storage unavailable
+try { if (!_localStorageAvailable) installLocalStorageShim(); } catch (e) {}
+
+// ====== API Request Manager (coalescing + backoff) ======
+const _inFlightRequests = new Map();
+const _lastCalledAt = new Map();
+const _minIntervalFor = new Map();
+const _backoffUntil = new Map();
+const MODE_CACHE_TTL_MS = 15000;
+const LECTURE_REFRESH_MS = 15000;
+const LOCATION_WRITE_INTERVAL_MS = 60000;
+let modeRecordCache = null;
+let lectureStudentsTimer = null;
+let lastSavedLocation = null;
+let lastLocationWriteAt = 0;
+
+function _normalizeUrlKey(url) {
+    return url.split('?')[0];
+}
+
+function _defaultMinInterval(url) {
+    // MODE table is more sensitive - default higher
+    if (url.includes('/' + encodeURIComponent(MODE_TABLE))) return 10000; // 10s for MODE reads
+    // Lecture tables and others - slightly lower
+    if (/LEC_\d+/.test(url)) return 1500;
+    return 1000;
+}
+
+async function apiGet(url, config = {}) {
+    const key = _normalizeUrlKey(url);
+
+    // If currently backing off for this key, throw a 429-like error immediately
+    const blockedUntil = _backoffUntil.get(key) || 0;
+    if (Date.now() < blockedUntil) {
+        const err = new Error('Client-side backoff - too many requests');
+        err.response = { status: 429, data: { error: 'BACKOFF' } };
+        throw err;
+    }
+
+    // Return existing in-flight promise to coalesce duplicate requests
+    if (_inFlightRequests.has(key)) return _inFlightRequests.get(key);
+
+    // Enforce minimum interval between requests
+    const minInterval = _minIntervalFor.get(key) || _defaultMinInterval(url);
+    const last = _lastCalledAt.get(key) || 0;
+    const now = Date.now();
+    const waitMs = Math.max(0, minInterval - (now - last));
+
+    const promise = (waitMs > 0 ? new Promise(r => setTimeout(r, waitMs)) : Promise.resolve()).then(() => {
+        return axios.get(url, config).then(resp => {
+            _lastCalledAt.set(key, Date.now());
+            // on success reset any backoff for this key
+            _backoffUntil.delete(key);
+            // clear in-flight
+            _inFlightRequests.delete(key);
+            return resp;
+        }).catch(err => {
+            // mark in-flight cleared
+            _inFlightRequests.delete(key);
+            const status = err?.response?.status;
+            // If unauthorized, set medium backoff and notify
+            if (status === 401) {
+                const next = 30 * 1000; // 30s backoff for auth failures
+                _backoffUntil.set(key, Date.now() + next);
+                try { showAlert('❌ Server rejected the data request. Please try again.', 'error'); } catch(e){}
+            }
+            if (status === 429) {
+                // exponential backoff per-key
+                const prev = _minIntervalFor.get(key) || _defaultMinInterval(url);
+                const next = Math.min(Math.max(prev * 2, 2000), 60000);
+                _minIntervalFor.set(key, next);
+                _backoffUntil.set(key, Date.now() + next);
+                try { window._lastData429 = true; } catch(e){}
+            }
+            throw err;
+        });
+    });
+
+    _inFlightRequests.set(key, promise);
+    return promise;
+}
+
+
 let currentLectureNumber = safeStorage.getItem('selectedLecture'); // Load from safeStorage
 let lectureSelected = safeStorage.getItem('lectureSelected') === 'true'; // Load from safeStorage
 let monitoringInterval = null; // 🎯 To monitor Student Mode changes
@@ -130,6 +202,30 @@ let scannedQRs = {
 };
 let isProcessingQR = false; // Prevent concurrent processing
 let deviceIP = null; // Device IP address
+
+async function getModeRecord(forceRefresh = false) {
+    const now = Date.now();
+    if (!forceRefresh && modeRecordCache && now - modeRecordCache.timestamp < MODE_CACHE_TTL_MS) {
+        return modeRecordCache.record;
+    }
+
+    const response = await apiGet(
+        `/api/data/${encodeURIComponent(MODE_TABLE)}`,
+        { headers: getDataHeaders() }
+    );
+    const records = Array.isArray(response?.data?.records) ? response.data.records : [];
+    const record = records.find(item => {
+        const name = item.fields?.Name || '';
+        return name.trim() === MODE_RECORD_NAME.trim();
+    }) || (records.length === 1 ? records[0] : null);
+
+    modeRecordCache = { record, timestamp: now };
+    return record;
+}
+
+function invalidateModeRecordCache() {
+    modeRecordCache = null;
+}
 
 // ====== Client-side input rate limiter (prevents brute-force and rapid submits)
 const RATE_LIMIT_KEY = 'client_rate_limits_v1';
@@ -254,14 +350,14 @@ document.addEventListener('DOMContentLoaded', autoProtectInteractiveElements);
 
 
 /**
- * 🔐 Read Protection Settings from Airtable
+ * 🔐 Read protection settings from Firestore
  * Checks if website is locked or unlocked
  */
 async function checkWebsiteProtectionStatus() {
     try {
         console.log('🔐 Checking website protection status via proxy...');
 
-        const resp = await axios.get(`${API_PROXY_BASE}/api/protection`);
+        const resp = await apiGet(`${API_PROXY_BASE}/api/protection`);
 
         if (!resp || !resp.data) {
             console.warn('⚠️ No response from protection endpoint');
@@ -294,7 +390,15 @@ async function checkWebsiteProtectionStatus() {
         console.log(`🔐 Protection Status: ${isWebsiteLocked ? 'LOCKED' : 'UNLOCKED'}`);
         return true;
     } catch (error) {
-        console.error('❌ Error checking protection status (proxy):', error.response?.data || error.message || error);
+        // Provide more actionable client-side logs for debugging
+        try {
+            const details = error?.response?.data || error?.message || error;
+            console.error('❌ Error checking protection status (proxy):', details);
+            // Show a user-friendly alert when protection cannot be verified
+            showAlert('Cannot verify protection settings. Please try again later.', 'error');
+        } catch (e) {
+            console.error('❌ Error checking protection status (proxy):', error);
+        }
         return false;
     }
 }
@@ -390,86 +494,26 @@ function startWebsiteLockMonitoring() {
  */
 async function getSelectedLectureFromMode() {
     try {
-        if (USE_MOCK_DATA) {
-            // في حالة البيانات الوهمية، استخدم safeStorage
-            const qr = safeStorage.getItem('selectedQR') || 'NONE';
-            const lecture = safeStorage.getItem('selectedLecture');
-            
-            // تحقق من أن QR محدد و المحاضرة موجودة
-            if (qr !== 'NONE' && lecture) {
-                console.log(`✓ Read lecture from localStorage: ${lecture}, QR: ${qr}`);
-                return parseInt(lecture);
-            } else {
-                console.warn(`⚠️ QR not enabled: ${qr}, Lecture: ${lecture}`);
-                return null;
-            }
-        }
-
-        // البحث عن السجل في جدول MODE
-        console.log('🔍 جاري البحث عن المحاضرة في جدول MODE...');
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(MODE_TABLE)}`,
-            { headers: getAirtableHeaders() }
-        );
-
-        // Defensive: ensure we received JSON with records array
-        if (!response || !response.data || !Array.isArray(response.data.records)) {
-            console.error('⚠️ Unexpected response from MODE endpoint (not JSON records)', response && response.data);
-            const bodyText = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
-            if (bodyText && bodyText.trim().startsWith('<')) {
-                showAlert('❌ Server returned HTML instead of API JSON. Try clearing Vercel CDN or re-deploy.', 'error');
-            } else {
-                showAlert('❌ Unexpected response from MODE endpoint', 'error');
-            }
+        const record = await getModeRecord(true);
+        if (!record) {
+            console.warn('⚠️ MODE table is empty or the configured record was not found');
             return null;
         }
 
-        console.log('📋 عدد السجلات المتاحة:', response.data.records.length);
-
-        if (response.data.records.length > 0) {
-            // البحث عن السجل الصحيح - مع معالجة مرنة لأنواع البيانات
-            let record = response.data.records.find(r => {
-                const name = r.fields.Name || '';
-                return name.trim() === MODE_RECORD_NAME.trim();
-            });
-            
-            // إذا لم نجده، جرب البحث عن أول سجل إذا كان هناك واحد فقط
-            if (!record && response.data.records.length === 1) {
-                console.warn('⚠️ تم استخدام السجل الوحيد في الجدول');
-                record = response.data.records[0];
-            }
-            
-            if (record) {
-                const lectureNum = record.fields.Lecture;
-                const studentMode = record.fields['Student Mode'];
-                const qrSelected = record.fields['QR Selected'] || 'NONE';
-                
-                console.log(`✓ تم العثور على السجل: Student Mode = ${studentMode}, Lecture = ${lectureNum}, QR Selected = ${qrSelected}`);
-                
-                // تحقق من أن الموضع مفعّل (ON) وأن QR محدد
-                if ((studentMode === 'ON' || studentMode === true) && lectureNum && qrSelected !== 'NONE') {
-                    console.log('✓ تم قراءة المحاضرة من MODE:', lectureNum, '- QR:', qrSelected);
-                    return parseInt(lectureNum);
-                } else {
-                    console.warn('⚠️ وضع الطالب معطّل أو لا توجد محاضرة مختارة أو لم يتم تحديد QR');
-                }
-            } else {
-                console.error(`❌ لم يتم العثور على سجل باسم "${MODE_RECORD_NAME}"`);
-                console.log('أسماء السجلات المتاحة:');
-                response.data.records.forEach((r, idx) => {
-                    console.log(`  ${idx + 1}. "${r.fields.Name || '(فارغ)'}" - Student Mode: ${r.fields['Student Mode']} - Lecture: ${r.fields.Lecture} - QR: ${r.fields['QR Selected'] || 'NONE'}`);
-                });
-            }
-        } else {
-            console.error('❌ جدول MODE فارغ');
+        const lectureNum = record.fields?.Lecture;
+        const studentMode = record.fields?.['Student Mode'];
+        const qrSelected = record.fields?.['QR Selected'] || 'NONE';
+        if ((studentMode === 'ON' || studentMode === true) && lectureNum && qrSelected !== 'NONE') {
+            return parseInt(lectureNum, 10);
         }
-        
+
+        console.warn('⚠️ Student mode is disabled or no lecture/QR is selected');
         return null;
     } catch (error) {
         console.error('❌ خطأ في قراءة جدول MODE:', error);
         if (error.response?.status === 401 || error.response?.status === 403) {
-            console.error('❌ خطأ في المصادقة: تحقق من API Key و BASE_ID');
-            showAlert('❌ خطأ في المصادقة مع Airtable. تحقق من البيانات المدخلة', 'error');
+            console.error('❌ خطأ في المصادقة: تحقق من إعدادات Firebase');
+            showAlert('❌ تعذر التحقق من إعدادات البيانات.', 'error');
         } else if (error.message === 'Network Error') {
             console.error('❌ خطأ في الاتصال بالإنترنت');
         }
@@ -482,22 +526,11 @@ async function getSelectedLectureFromMode() {
  */
 async function updateStudentMode(lectureNumber, isEnabled) {
     try {
-        if (USE_MOCK_DATA) {
-            // في حالة البيانات الوهمية، استخدم safeStorage
-            if (isEnabled) {
-                safeStorage.setItem('selectedLecture', lectureNumber);
-                safeStorage.setItem('studentMode', 'ON');
-            } else {
-                safeStorage.setItem('studentMode', 'OFF');
-            }
-            return true;
-        }
-
         // البحث عن السجل في جدول MODE
         console.log('🔍 جاري البحث في جدول MODE...');
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(MODE_TABLE)}`,
-            { headers: getAirtableHeaders() }
+        const response = await apiGet(
+              `/api/data/${encodeURIComponent(MODE_TABLE)}`,
+            { headers: getDataHeaders() }
         );
 
         // Defensive: validate response structure
@@ -543,16 +576,17 @@ async function updateStudentMode(lectureNumber, isEnabled) {
 
         // تحديث السجل
         const updateResponse = await axios.patch(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(MODE_TABLE)}/${recordId}`,
+            `/api/data/${encodeURIComponent(MODE_TABLE)}/${recordId}`,
             {
                 fields: {
                     'Lecture': isEnabled ? String(lectureNumber) : null,
                     'Student Mode': isEnabled ? 'ON' : 'OFF'
                 }
             },
-            { headers: getAirtableHeaders() }
+            { headers: getDataHeaders() }
         );
 
+        invalidateModeRecordCache();
         console.log(`✓ MODE table updated: Student Mode = ${isEnabled ? 'ON' : 'OFF'}, Lecture = ${lectureNumber}`);
         return true;
     } catch (error) {
@@ -618,24 +652,11 @@ async function selectQRCode(qrValue) {
  */
 async function updateSelectedQR(lectureNumber, qrValue) {
     try {
-        if (USE_MOCK_DATA) {
-            // في حالة البيانات الوهمية، استخدم safeStorage
-            if (qrValue !== 'NONE') {
-                safeStorage.setItem('selectedLecture', lectureNumber);
-                safeStorage.setItem('selectedQR', qrValue);
-                safeStorage.setItem('studentMode', 'ON');
-            } else {
-                safeStorage.setItem('selectedQR', 'NONE');
-                safeStorage.setItem('studentMode', 'OFF');
-            }
-            return true;
-        }
-
         // البحث عن السجل في جدول MODE
         console.log('🔍 جاري البحث في جدول MODE...');
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(MODE_TABLE)}`,
-            { headers: getAirtableHeaders() }
+        const response = await apiGet(
+              `/api/data/${encodeURIComponent(MODE_TABLE)}`,
+            { headers: getDataHeaders() }
         );
 
         // Defensive: ensure records exists
@@ -668,7 +689,7 @@ async function updateSelectedQR(lectureNumber, qrValue) {
 
         // تحديث السجل
         const updateResponse = await axios.patch(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(MODE_TABLE)}/${recordId}`,
+            `/api/data/${encodeURIComponent(MODE_TABLE)}/${recordId}`,
             {
                 fields: {
                     'Lecture': String(lectureNumber),
@@ -676,9 +697,10 @@ async function updateSelectedQR(lectureNumber, qrValue) {
                     'Student Mode': studentMode
                 }
             },
-            { headers: getAirtableHeaders() }
+            { headers: getDataHeaders() }
         );
 
+        invalidateModeRecordCache();
         console.log(`✓ MODE table updated: QR Selected = ${qrValue}, Student Mode = ${studentMode}`);
         return true;
     } catch (error) {
@@ -694,132 +716,24 @@ async function updateSelectedQR(lectureNumber, qrValue) {
  */
 async function getSelectedQRFromMode() {
     try {
-        // Lightweight in-page cache to avoid repeated MODE requests during rapid scans
-        const MODE_CACHE_TTL = 5 * 1000; // 5 seconds
-        try {
-            if (!window._modeCache) window._modeCache = {};
-            const cached = window._modeCache['MODE_TABLE'];
-            if (cached && (Date.now() - cached.ts) < MODE_CACHE_TTL) {
-                if (cached.value) {
-                    return cached.value;
-                }
-                // fall through to network if cached value was 'NONE'
-            }
-        } catch (e) { /* ignore cache errors */ }
-        if (USE_MOCK_DATA) {
-            // في حالة البيانات الوهمية، استخدم safeStorage
-            const qr = safeStorage.getItem('selectedQR') || 'NONE';
-            console.log(`📋 Loaded QR from safeStorage: ${qr}`);
-            return qr;
-        }
+        const record = await getModeRecord();
+        if (!record) return 'NONE';
 
-        // البحث عن السجل في جدول MODE
-        console.log('🔍 جاري البحث عن QR المختار في جدول MODE...');
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(MODE_TABLE)}`,
-            { headers: getAirtableHeaders() }
-        );
-
-        if (!response || !response.data || !Array.isArray(response.data.records) || response.data.records.length === 0) {
-            console.error('❌ Invalid MODE response when getting selected QR', response && response.data);
-            return 'NONE';
-        }
-
-        if (response.data.records.length > 0) {
-            // البحث عن السجل الصحيح
-            let record = response.data.records.find(r => {
-                const name = r.fields.Name || '';
-                return name.trim() === MODE_RECORD_NAME.trim();
-            });
-            
-            if (!record && response.data.records.length === 1) {
-                console.warn('⚠️ تم استخدام السجل الوحيد في الجدول');
-                record = response.data.records[0];
-            }
-            
-            if (record) {
-                const qrSelected = record.fields['QR Selected'] || 'NONE';
-                const studentMode = record.fields['Student Mode'];
-                
-                console.log(`✓ تم العثور على السجل: QR Selected = ${qrSelected}, Student Mode = ${studentMode}`);
-                
-                // تحقق من أن وضع الطالب مفعّل وأن QR محدد
-                if ((studentMode === 'ON' || studentMode === true) && qrSelected !== 'NONE') {
-                    console.log('✓ تم قراءة QR المختار من MODE:', qrSelected);
-                    try {
-                        window._modeCache['MODE_TABLE'] = { ts: Date.now(), value: qrSelected };
-                    } catch (e) {}
-                    return qrSelected;
-                } else {
-                    console.warn('⚠️ وضع الطالب معطّل أو لا يوجد QR محدد');
-                }
-            } else {
-                console.error(`❌ لم يتم العثور على سجل باسم "${MODE_RECORD_NAME}"`);
-            }
-        } else {
-            console.error('❌ جدول MODE فارغ');
-        }
-        
-        return 'NONE';
+        const qrSelected = record.fields?.['QR Selected'] || 'NONE';
+        const studentMode = record.fields?.['Student Mode'];
+        return (studentMode === 'ON' || studentMode === true) ? qrSelected : 'NONE';
     } catch (error) {
         console.error('❌ خطأ في قراءة جدول MODE:', error);
-        try {
-            window._modeCache['MODE_TABLE'] = { ts: Date.now(), value: 'NONE' };
-        } catch (e) {}
         return 'NONE';
     }
 }
 
 /**
- * 🎚️ تحديث حالة QR Selection من Airtable (عند تحميل صفحة الدكتور)
+ * 🎚️ تحديث حالة QR Selection من Firestore
  */
 async function updateQRSelectionDisplay() {
     try {
-        if (USE_MOCK_DATA) {
-            const selectedQR = safeStorage.getItem('selectedQR') || 'NONE';
-            const statusDiv = document.getElementById('mode-status');
-            
-            if (statusDiv) {
-                if (selectedQR === 'NONE') {
-                    statusDiv.textContent = '✗ Status: No QR Selected';
-                    statusDiv.style.color = '#c62828';
-                } else {
-                    statusDiv.textContent = `✓ Status: ${selectedQR} Active`;
-                    statusDiv.style.color = '#2e7d32';
-                }
-            }
-            
-            // Set radio button
-            const radio = document.querySelector(`input[name="qr-select"][value="${selectedQR}"]`);
-            if (radio) {
-                radio.checked = true;
-            }
-            return;
-        }
-
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(MODE_TABLE)}`,
-            { headers: getAirtableHeaders() }
-        );
-
-        // Defensive check: ensure we received JSON with records array
-        if (!response || !response.data || !Array.isArray(response.data.records)) {
-            console.error('⚠️ Unexpected response from MODE endpoint (not JSON records)');
-            // If HTML returned (e.g., index.html), show a clear alert for the user
-            const bodyText = typeof response.data === 'string' ? response.data : JSON.stringify(response.data || {});
-            if (bodyText && bodyText.trim().startsWith('<')) {
-                showAlert('❌ Server returned HTML instead of API JSON. Try clearing Vercel CDN or re-deploy.', 'error');
-            } else {
-                showAlert('❌ Unexpected response from MODE endpoint', 'error');
-            }
-            return;
-        }
-
-        let record = response.data.records.find(r => {
-            const name = r.fields.Name || '';
-            return name.trim() === MODE_RECORD_NAME.trim();
-        }) || response.data.records[0];
-
+        const record = await getModeRecord(true);
         if (!record) return;
 
         const qrSelected = record.fields['QR Selected'] || 'NONE';
@@ -846,7 +760,7 @@ async function updateQRSelectionDisplay() {
 }
 
 /**
- * 🎚️ تحديث حالة Toggle من Airtable (Legacy - kept for compatibility)
+ * 🎚️ تحديث حالة Toggle من Firestore
  */
 async function updateToggleStatus() {
     try {
@@ -961,7 +875,7 @@ async function getDeviceIP() {
  * و التحقق من أن الكود الجامعي لم يُستخدم من IP مختلف
  * استخدام جدول RAM الذي يسجل جلسات الدخول الحالية
  */
-async function checkDeviceIPConflict(studentCode, lectureNumber) {
+async function checkDeviceIPConflict(studentCode, lectureNumber, existingStudentRecord = null) {
     const currentIP = await getDeviceIP();
     console.log(`🔍 فحص تضارب IP: Code=${studentCode}, IP=${currentIP}, Lecture=${lectureNumber}`);
     
@@ -973,63 +887,25 @@ async function checkDeviceIPConflict(studentCode, lectureNumber) {
 
     try {
         const tableName = `LEC_${lectureNumber}`;
-        
-        if (USE_MOCK_DATA) {
-            console.log('📋 فحص Mock Data...');
-            // محاكاة جدول RAM
-            let mockRAM = JSON.parse(safeStorage.getItem('mock_ram') || '{}');
-            console.log('RAM Mock Data:', mockRAM);
-            
-            // ✅ الفحص الأول: إذا كان هناك IP مسجل في RAM مع كود مختلف
-            for (const code in mockRAM) {
-                if (mockRAM[code] === currentIP && code !== studentCode) {
-                    console.warn(`⚠️ نفس IP مُستخدم برمز جامعي مختلف: ${code}`);
-                    showAlert(`❌ هذا الجهاز مسجل برمز جامعي مختلف (${code}) - لا يمكن الدخول`, 'error');
-                    return false;
-                }
-            }
-            
-            // فحص في جدول المحاضرة (تاريخ الحضور)
-            if (!MOCK_LECTURES[tableName]) {
-                console.log(`✓ جدول ${tableName} فارغ - سماح`);
-                return true;
-            }
-            
-            // ✅ الفحص الأول: هل IP مسجل برمز مختلف؟
-            for (const code in MOCK_LECTURES[tableName]) {
-                const student = MOCK_LECTURES[tableName][code];
-                if (student['Device IP'] && student['Device IP'] === currentIP && code !== studentCode) {
-                    console.warn(`⚠️ نفس IP مُستخدم برمز جامعي مختلف: ${code}`);
-                    showAlert(`❌ هذا الجهاز مرتبط برمز جامعي مختلف (${code}) - لا يمكن تسجيل الدخول`, 'error');
-                    return false;
-                }
-            }
-            
-            // ✅ الفحص الثاني: هل رمز الطالب هذا عنده IP مختلف مسجل؟
-            if (MOCK_LECTURES[tableName][studentCode]) {
-                const studentData = MOCK_LECTURES[tableName][studentCode];
-                if (studentData['Device IP'] && studentData['Device IP'] !== currentIP && studentData['Device IP'] !== 'Unknown') {
-                    console.warn(`⚠️ رمز الطالب ${studentCode} عنده IP مختلف مسجل: ${studentData['Device IP']}`);
-                    showAlert(`❌ رمز الطالب هذا مسجل من IP مختلف - لا يمكن تسجيل الدخول من جهاز جديد`, 'error');
-                    return false;
-                }
-            }
-            
-            console.log('✓ فحص Mock Data: سماح');
-            return true;
-        }
 
         // ✅ الفحص الأول: البحث في جدول المحاضرة عن IP (هل مسجل برمز مختلف؟)
         console.log(`🔍 الفحص الأول - فحص جدول ${tableName} عن IP: ${currentIP}`);
-        const lectureResponseByIP = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=({Device IP}='${currentIP}')`,
-            { headers: getAirtableHeaders() }
+        const lectureResponseByIP = await apiGet(
+            `/api/data/${encodeURIComponent(tableName)}?filterByFormula=({Device IP}='${currentIP}')`,
+            { headers: getDataHeaders() }
         );
 
-        console.log('فحص IP في جدول المحاضرة:', lectureResponseByIP.data.records.length, 'records');
-        if (lectureResponseByIP.data.records.length > 0) {
-            const lectureRecord = lectureResponseByIP.data.records[0];
-            const registeredCode = String(lectureRecord.fields.Code); // ✅ تحويل إلى String
+        const ipRecords = Array.isArray(lectureResponseByIP?.data?.records)
+            ? lectureResponseByIP.data.records
+            : [];
+        console.log('فحص IP في جدول المحاضرة:', ipRecords.length, 'records');
+        const matchingIPRecord = ipRecords.find(record => {
+            const registeredIP = String(record.fields?.['Device IP'] || '').trim();
+            return registeredIP === String(currentIP).trim();
+        });
+        if (matchingIPRecord) {
+            const lectureRecord = matchingIPRecord;
+            const registeredCode = String(lectureRecord.fields?.Code || lectureRecord.id || '').trim();
             console.log(`✓ وجد في ${tableName}: Code=${registeredCode}, IP=${currentIP}`);
             
             if (registeredCode !== String(studentCode)) { // ✅ مقارنة String مع String
@@ -1044,18 +920,21 @@ async function checkDeviceIPConflict(studentCode, lectureNumber) {
 
         // ✅ الفحص الثاني: البحث عن رمز الطالب (هل عنده IP مختلف مسجل؟)
         console.log(`🔍 الفحص الثاني - فحص جدول ${tableName} عن رمز الطالب: ${studentCode}`);
-        const lectureResponseByCode = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
+        const lectureResponseByCode = existingStudentRecord ? null : await apiGet(
+            `/api/data/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
+            { headers: getDataHeaders() }
         );
 
-        console.log('فحص الكود في جدول المحاضرة:', lectureResponseByCode.data.records.length, 'records');
-        if (lectureResponseByCode.data.records.length > 0) {
-            const studentRecord = lectureResponseByCode.data.records[0];
-            const registeredIP = studentRecord.fields['Device IP'];
+        const studentRecords = existingStudentRecord
+            ? [existingStudentRecord]
+            : (Array.isArray(lectureResponseByCode?.data?.records) ? lectureResponseByCode.data.records : []);
+        console.log('فحص الكود في جدول المحاضرة:', studentRecords.length, 'records');
+        if (studentRecords.length > 0) {
+            const studentRecord = studentRecords[0];
+            const registeredIP = String(studentRecord.fields?.['Device IP'] || '').trim();
             console.log(`✓ وجد كود الطالب في ${tableName}: Code=${studentCode}, Device IP=${registeredIP}`);
             
-            if (registeredIP && registeredIP !== currentIP && registeredIP !== 'Unknown') {
+            if (registeredIP && registeredIP !== String(currentIP).trim() && registeredIP !== 'Unknown') {
                 // ❌ الكود نفسه عنده IP مختلف مسجل
                 console.warn(`❌ رفض الفحص الثاني: رمز الطالب عنده IP مختلف (${registeredIP} ≠ ${currentIP})`);
                 showAlert(`❌ رمز الطالب هذا مسجل من IP مختلف (${registeredIP}) - لا يمكن تسجيل الدخول من جهاز جديد`, 'error');
@@ -1074,7 +953,8 @@ async function checkDeviceIPConflict(studentCode, lectureNumber) {
         
     } catch (error) {
         console.error('❌ خطأ في فحص تضارب IP:', error.response?.data || error.message);
-        return true; // السماح بالدخول عند الخطأ
+        showAlert('❌ تعذر التحقق من جهازك. حاول مرة أخرى.', 'error');
+        return false;
     }
 }
 
@@ -1085,7 +965,8 @@ async function checkDeviceIPConflict(studentCode, lectureNumber) {
  */
 async function requestCameraPermission() {
     try {
-        await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        stream.getTracks().forEach(track => track.stop());
         return true;
     } catch (error) {
         showAlert('لم يتم الموافقة على صلاحية الكاميرا', 'error');
@@ -1189,17 +1070,11 @@ async function showStudentInterface() {
     // إعادة تعيين flag المعالجة
     isProcessingQR = false;
     
-    // طلب الصلاحيات
-    const permissionsGranted = await requestAllPermissions();
-    if (!permissionsGranted) {
-        showAlert('بعض الصلاحيات غير متاحة، سيتم استخدام بيانات اختبار', 'warning');
-    }
-    
     currentMode = 'student';
     
-    // 📖 قراءة الأكواد المحفوظة من Airtable وتحديث العلامات
+    // 📖 قراءة الأكواد المحفوظة من Firestore وتحديث العلامات
     const tableName = `LEC_${currentLectureNumber}`;
-    await loadStudentScannedQRs(currentStudentCode, currentLectureNumber, tableName);
+    await loadStudentScannedQRs(currentStudentCode, currentLectureNumber, tableName, currentStudentRecord);
     
     // 🎯 بدء مراقبة Student Mode (للتحقق من الإيقاف من قبل المحاضر)
     startStudentModeMonitoring();
@@ -1213,6 +1088,7 @@ function showDoctorInterface() {
     document.getElementById('login-section').style.display = 'none';
     document.getElementById('student-section').style.display = 'none';
     document.getElementById('doctor-panel').style.display = 'block';
+    currentMode = 'doctor';
     
     // Show top bar
     const topBar = document.getElementById('top-bar');
@@ -1226,14 +1102,13 @@ function showDoctorInterface() {
         document.getElementById('lecture-info').style.display = 'block';
         document.getElementById('lecture-number').value = currentLectureNumber;
         
-        // 🎚️ Update toggle status (check current status from Airtable)
+        // 🎚️ Update toggle status from Firestore
         updateToggleStatus();
         
         // Start updating student list immediately
         startLectureStudentUpdates();
     }
     
-    currentMode = 'doctor';
 }
 
 /**
@@ -1259,7 +1134,14 @@ async function exitMode() {
     // Reset variables
     currentMode = null;
     currentStudentCode = null;
+    currentStudentRecord = null;
     deviceIP = null; // ✅ Important: Reset Device IP
+    lastSavedLocation = null;
+    lastLocationWriteAt = 0;
+    if (lectureStudentsTimer) {
+        clearTimeout(lectureStudentsTimer);
+        lectureStudentsTimer = null;
+    }
     // currentLectureNumber and lectureSelected remain saved in localStorage
     scannedQRs = { qr1: false, qr2: false, qr3: false };
     isProcessingQR = false; // Reset processing flag
@@ -1291,195 +1173,129 @@ function resetQRCheckboxes() {
     });
 }
 
-// ====== Airtable Functions ======
+// ====== Shared API Helpers ======
 
 /**
- * Create HTTP request headers
+ * Create HTTP request headers for the local Firebase proxy.
  */
-function getAirtableHeaders() {
-    // Authorization is handled by the server proxy. Client only sends JSON content-type.
+function getDataHeaders() {
     return { 'Content-Type': 'application/json' };
 }
 
-// Intercept direct Airtable URLs and route them through local proxy so keys are never exposed
-if (typeof axios !== 'undefined' && axios.interceptors) {
-    axios.interceptors.request.use(function (config) {
-        try {
-            const url = config.url || '';
-            const prefix = 'https://api.airtable.com/v0/';
-            if (url.startsWith(prefix)) {
-                    const rest = url.slice(prefix.length); // baseId/rest/of/path
-                    // remove querystring from rest before splitting into path parts
-                    const restQsIndex = rest.indexOf('?');
-                    const restNoQs = restQsIndex !== -1 ? rest.slice(0, restQsIndex) : rest;
-                    const parts = restNoQs.split('/');
-                    const baseId = parts.shift();
-                    const path = parts.join('/');
-                    // preserve original querystring (from full url)
-                    const qsIndex = url.indexOf('?');
-                    const qs = qsIndex !== -1 ? url.slice(qsIndex) : '';
-                    config.url = `${API_PROXY_BASE}/api/airtable/${baseId}/${path}${qs}`;
-                // remove any auth header that might exist
-                if (config.headers) delete config.headers['Authorization'];
-            }
-        } catch (e) {
-            // ignore
-        }
-        return config;
-    }, function (err) { return Promise.reject(err); });
+function getStudentName(fields = {}) {
+    const candidates = [
+        fields.Name,
+        fields['Student Name'],
+        fields['Full Name'],
+        fields.name,
+        fields.StudentName,
+        fields.studentName,
+        fields.Student_Name,
+        fields.student_name,
+        fields['اسم الطالب']
+    ];
+    const namedField = Object.entries(fields).find(([key, value]) => {
+        const normalizedKey = key.toLowerCase().replace(/[\s_-]/g, '');
+        return (normalizedKey === 'name' || normalizedKey === 'studentname' || normalizedKey === 'fullname') &&
+            value !== undefined && value !== null && String(value).trim();
+    });
+    const name = candidates.find(value => value !== undefined && value !== null && String(value).trim()) || namedField?.[1];
+    return name ? String(name).trim() : '';
 }
 
 /**
- * Search for student in Airtable or mock data
+ * Search for student in the active Firestore-backed lecture directory.
  */
-async function findStudent(studentCode) {
-    // إذا كنا نستخدم البيانات الوهمية، ابحث فيها أولاً
-    if (USE_MOCK_DATA && MOCK_STUDENTS[studentCode]) {
-        return MOCK_STUDENTS[studentCode];
-    }
-
+async function findStudent(studentCode, lectureNumber = null) {
     try {
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(STUDENTS_TABLE)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
+        const tableName = lectureNumber ? `LEC_${lectureNumber}` : STUDENTS_TABLE;
+        const response = await apiGet(
+            `/api/data/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
+            { headers: getDataHeaders() }
         );
 
-        if (response.data.records.length > 0) {
-            return response.data.records[0];
-        }
-        return null;
-    } catch (error) {
-        console.error('Error searching for student:', error);
-        // If Airtable connection fails, use mock data
-        if (USE_MOCK_DATA && MOCK_STUDENTS[studentCode]) {
-            return MOCK_STUDENTS[studentCode];
-        }
-        return null;
-    }
-}
+        const lectureStudent = response?.data?.records?.[0];
+        if (!lectureStudent) return null;
 
-/**
- * Save Device IP on first student login (for security and verification)
- */
-async function saveDeviceIPForStudent(studentCode, lectureNumber) {
-    try {
-        const tableName = `LEC_${lectureNumber}`;
-        console.log(`🔄 Starting to save Device IP for student ${studentCode} in table ${tableName}...`);
-        
-        if (USE_MOCK_DATA) {
-            // Save in mock data
-            if (!MOCK_LECTURES[tableName]) {
-                MOCK_LECTURES[tableName] = {};
-            }
-            if (!MOCK_LECTURES[tableName][studentCode]) {
-                MOCK_LECTURES[tableName][studentCode] = {};
-            }
-            MOCK_LECTURES[tableName][studentCode]['Device IP'] = deviceIP || 'Unknown';
-            saveMockData();
-            console.log(`✓ Device IP saved in lecture: ${deviceIP}`);
-            return;
-        }
+        const lectureFields = lectureStudent.fields || {};
+        const hasName = getStudentName(lectureFields);
+        if (hasName) return lectureStudent;
 
-        // Search for student record in Airtable
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
-        );
-
-        if (response.data.records.length > 0) {
-            // ✅ Update existing record
-            const recordId = response.data.records[0].id;
-            await axios.patch(
-                `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}/${recordId}`,
-                {
-                    fields: {
-                        'Device IP': deviceIP || 'Unknown'
-                    }
-                },
-                { headers: getAirtableHeaders() }
+        if (lectureNumber && STUDENTS_TABLE !== tableName) {
+            const directoryResponse = await apiGet(
+                `/api/data/${encodeURIComponent(STUDENTS_TABLE)}?filterByFormula=({Code}='${studentCode}')`,
+                { headers: getDataHeaders() }
             );
-            console.log(`✓ Device IP updated in table ${tableName}: ${deviceIP}`);
-        } else {
-            // ✅ Create new record if not found
-            console.warn(`⚠️ Student ${studentCode} not found in table ${tableName} - will be added`);
-            // Do not create new record - this is an error, student must exist
-        }
-        
-    } catch (error) {
-        console.error('❌ Error saving Device IP in lecture table:', error);
-        try {
-            console.error('↳ Airtable response status:', error.response?.status);
-            console.error('↳ Airtable response body:', JSON.stringify(error.response?.data));
-        } catch (e) {
-            console.error('↳ Unable to serialize error response:', e);
-        }
-    }
-}
-
-/**
- * Update student data in lecture table (mock or real)
- */
-async function updateStudentAttendance(studentCode, lectureNumber, tableName, columnName) {
-    try {
-        if (USE_MOCK_DATA) {
-            // Create table if not exists
-            if (!MOCK_LECTURES[tableName]) {
-                MOCK_LECTURES[tableName] = {};
-            }
-            
-            // Search for student
-            if (!MOCK_LECTURES[tableName][studentCode]) {
-                const mapsLink = `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`;
-                MOCK_LECTURES[tableName][studentCode] = {
-                    Name: MOCK_STUDENTS[studentCode]?.fields?.Name || 'Unknown',
-                    Code: studentCode,
-                    Location: mapsLink,
-                    Region: 'In region',
-                    'Device IP': deviceIP || 'Unknown',
-                    '1st QR': false,
-                    '2nd QR': false,
-                    '3rd QR': false
+            const directoryStudent = directoryResponse?.data?.records?.[0];
+            const directoryName = getStudentName(directoryStudent?.fields);
+            if (directoryName) {
+                return {
+                    ...lectureStudent,
+                    fields: { ...lectureFields, Name: directoryName }
                 };
             }
-            
-            // Create Google Maps link
-            const mapsLink = `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`;
-            
-            // Update QR based on column name
-            MOCK_LECTURES[tableName][studentCode][columnName] = true;
-            MOCK_LECTURES[tableName][studentCode].Location = mapsLink;
-            MOCK_LECTURES[tableName][studentCode].Region = checkGeographicRegion();
-            MOCK_LECTURES[tableName][studentCode]['Device IP'] = deviceIP || 'Unknown';
-            
-            // Save data
-            saveMockData();
-            
-            console.log('✓ Student data updated (Mock):', MOCK_LECTURES[tableName][studentCode]);
-            return { success: true };
         }
-        
-        // Real Airtable code
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
+
+        return lectureStudent;
+    } catch (error) {
+        console.error('Error searching for student:', error);
+        return null;
+    }
+}
+
+/**
+ * Save the student's login data with one write after the record was resolved.
+ */
+async function saveStudentLoginData(studentCode, lectureNumber, studentName, studentRecord) {
+    if (!studentRecord?.id || !studentLocation) return false;
+
+    try {
+        const tableName = `LEC_${lectureNumber}`;
+        const mapsLink = `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`;
+        const region = checkGeographicRegion();
+        await axios.patch(
+            `/api/data/${encodeURIComponent(tableName)}/${studentRecord.id}`,
+            {
+                fields: {
+                    'Device IP': deviceIP || 'Unknown',
+                    'Location': mapsLink,
+                    'Region': region,
+                    ...(studentName ? { Name: studentName } : {})
+                }
+            },
+            { headers: getDataHeaders() }
+        );
+        lastSavedLocation = { lat: studentLocation.lat, lng: studentLocation.lng };
+        lastLocationWriteAt = Date.now();
+        return true;
+    } catch (error) {
+        console.error('Error saving student login data:', error);
+        return false;
+    }
+}
+
+/**
+ * Update student attendance data in the current lecture table.
+ */
+async function updateStudentAttendance(studentCode, lectureNumber, tableName, columnName, existingStudentRecord = null) {
+    try {
+        const response = existingStudentRecord ? null : await apiGet(
+            `/api/data/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
+            { headers: getDataHeaders() }
         );
 
-        if (response.data.records.length === 0) {
+        const studentRecord = existingStudentRecord || response?.data?.records?.[0];
+        if (!studentRecord) {
             console.error('❌ Student not found in lecture table');
             return null;
         }
 
-        // Create Google Maps link from coordinates
         const mapsLink = `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`;
-        
-        const studentRecord = response.data.records[0];
         const recordId = studentRecord.id;
-        
-        // Determine Region based on student location
         const region = checkGeographicRegion();
-        
+
         const updateResponse = await axios.patch(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}/${recordId}`,
+            `/api/data/${encodeURIComponent(tableName)}/${recordId}`,
             {
                 fields: {
                     [columnName]: true,
@@ -1488,7 +1304,7 @@ async function updateStudentAttendance(studentCode, lectureNumber, tableName, co
                     'Device IP': deviceIP || 'Unknown'
                 }
             },
-            { headers: getAirtableHeaders() }
+            { headers: getDataHeaders() }
         );
 
         console.log(`✓ تم تحديث ${columnName} والموقع والـ Device IP والـ Region للطالب في جدول ${tableName}`);
@@ -1500,54 +1316,21 @@ async function updateStudentAttendance(studentCode, lectureNumber, tableName, co
 }
 
 /**
- * إضافة طالب جديد إلى جدول المحاضرة (محاكاة أو حقيقي)
+ * Add a new student record to the selected lecture table.
  */
 async function addStudentToLecture(studentCode, lectureNumber, tableName) {
     try {
-        // إذا لم يتم تمرير اسم الجدول، استخدم الصيغة الافتراضية
         if (!tableName) {
             tableName = `LEC_${lectureNumber}`;
         }
-        
-        if (USE_MOCK_DATA) {
-            if (!MOCK_LECTURES[tableName]) {
-                MOCK_LECTURES[tableName] = {};
-            }
-            
-            const studentRecord = await findStudent(studentCode);
-            if (!studentRecord) return null;
 
-            const studentName = studentRecord.fields.Name || '';
-            
-            const mapsLink = `https://maps.google.com/?q=${studentLocation?.lat || 0},${studentLocation?.lng || 0}`;
-            
-            MOCK_LECTURES[tableName][studentCode] = {
-                Name: studentName,
-                Code: studentCode,
-                Location: mapsLink,
-                Region: 'In region',
-                'Device IP': deviceIP || 'Unknown',
-                '1st QR': false,
-                '2nd QR': false,
-                '3rd QR': false
-            };
-            
-            saveMockData();
-            
-            return {
-                id: `mock_${studentCode}`,
-                fields: MOCK_LECTURES[tableName][studentCode]
-            };
-        }
-        
-        // الكود الحقيقي لـ Airtable
         const studentRecord = await findStudent(studentCode);
         if (!studentRecord) return null;
 
         const studentName = studentRecord.fields.Name || '';
-        
+
         const response = await axios.post(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}`,
+            `/api/data/${encodeURIComponent(tableName)}`,
             {
                 records: [
                     {
@@ -1564,7 +1347,7 @@ async function addStudentToLecture(studentCode, lectureNumber, tableName) {
                     }
                 ]
             },
-            { headers: getAirtableHeaders() }
+            { headers: getDataHeaders() }
         );
 
         console.log(`✓ تم إضافة الطالب ${studentCode} إلى جدول ${tableName} مع Device IP`);
@@ -1576,42 +1359,30 @@ async function addStudentToLecture(studentCode, lectureNumber, tableName) {
 }
 
 /**
- * Update student location in Airtable (mock or real)
+ * Update student location in the current lecture table.
  */
 async function updateStudentLocation(studentCode, lectureNumber) {
+    if (!studentLocation) return false;
+
+    const now = Date.now();
+    if (lastSavedLocation && now - lastLocationWriteAt < LOCATION_WRITE_INTERVAL_MS) {
+        return true;
+    }
+
     try {
-        const tableName = `LEC_${lectureNumber}`; // Use correct format
-        
-        // Create Google Maps link
+        const tableName = `LEC_${lectureNumber}`;
         const mapsLink = `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`;
-        
-        if (USE_MOCK_DATA) {
-            if (!MOCK_LECTURES[tableName]) {
-                MOCK_LECTURES[tableName] = {};
-            }
-            
-            if (MOCK_LECTURES[tableName][studentCode]) {
-                const regionStatus = checkGeographicRegion();
-                MOCK_LECTURES[tableName][studentCode].Location = mapsLink;
-                MOCK_LECTURES[tableName][studentCode].Region = regionStatus;
-                MOCK_LECTURES[tableName][studentCode]['Device IP'] = deviceIP || 'Unknown';
-                saveMockData();
-            }
-            return;
-        }
-        
-        // Real Airtable code
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
+        const response = await apiGet(
+            `/api/data/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
+            { headers: getDataHeaders() }
         );
 
-        if (response.data.records.length > 0) {
+        if (response?.data?.records?.length > 0 && studentLocation) {
             const recordId = response.data.records[0].id;
             const regionStatus = checkGeographicRegion();
-            
+
             await axios.patch(
-                `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}/${recordId}`,
+                `/api/data/${encodeURIComponent(tableName)}/${recordId}`,
                 {
                     fields: {
                         'Location': mapsLink,
@@ -1619,108 +1390,98 @@ async function updateStudentLocation(studentCode, lectureNumber) {
                         'Device IP': deviceIP || 'Unknown'
                     }
                 },
-                { headers: getAirtableHeaders() }
+                { headers: getDataHeaders() }
             );
+            lastSavedLocation = { lat: studentLocation.lat, lng: studentLocation.lng };
+            lastLocationWriteAt = now;
+            return true;
         }
     } catch (error) {
         console.error('Error updating student location:', error);
     }
+    return false;
 }
 
 /**
- * Fetch list of students for specified lecture (mock or real)
+ * Fetch list of students for the selected lecture.
  */
 async function fetchLectureStudents(lectureNumber) {
     try {
-        const tableName = `LEC_${lectureNumber}`; // Use correct format
-        
-        if (USE_MOCK_DATA) {
-            if (!MOCK_LECTURES[tableName]) {
-                return [];
-            }
-            
-            // Convert mock data to Airtable format
-            const students = [];
-            for (const code in MOCK_LECTURES[tableName]) {
-                students.push({
-                    id: `mock_${code}`,
-                    fields: MOCK_LECTURES[tableName][code]
-                });
-            }
-            return students;
+        const tableName = `LEC_${lectureNumber}`;
+        const cacheKey = `lecture:${lectureNumber}`;
+        const now = Date.now();
+        const cached = window._lectureStudentsCache?.[cacheKey];
+        if (cached && now - cached.timestamp < 4000) {
+            return cached.records;
         }
-        
-        // Real Airtable code
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}`,
-            { headers: getAirtableHeaders() }
+        const response = await apiGet(
+            `/api/data/${encodeURIComponent(tableName)}`,
+            { headers: getDataHeaders() }
         );
 
-        // Clear any previous 429 indicator on success
-        try { window._lastAirtable429 = false; } catch (e) {}
-
-        return response.data.records;
+        try { window._lastData429 = false; } catch (e) {}
+        const records = Array.isArray(response?.data?.records) ? response.data.records : [];
+        if (!window._lectureStudentsCache) window._lectureStudentsCache = {};
+        window._lectureStudentsCache[cacheKey] = { timestamp: now, records };
+        return records;
     } catch (error) {
         console.error('Error fetching students:', error);
-        // Mark if we hit a 429 so polling can back off
         try {
             if (error.response && error.response.status === 429) {
-                window._lastAirtable429 = true;
+                window._lastData429 = true;
             }
         } catch (e) {}
         return [];
     }
 }
 
+async function enrichStudentNamesForExport(records) {
+    const missingNames = records.filter(record => !getStudentName(record.fields || {}));
+    if (missingNames.length === 0) return;
+
+    const directoryStudents = await fetchLectureStudents(1);
+    const namesByCode = new Map();
+    directoryStudents.forEach(record => {
+        const code = String(record.fields?.Code || record.id || '').trim();
+        const name = getStudentName(record.fields || {});
+        if (code && name) namesByCode.set(code, name);
+    });
+
+    missingNames.forEach(record => {
+        const code = String(record.fields?.Code || record.id || '').trim();
+        const name = namesByCode.get(code);
+        if (name) record.fields.Name = name;
+    });
+}
+
 // ====== Geographic Verification Functions ======
 
 /**
- * قراءة الأكواد المحفوظة للطالب من Airtable وتحديث العلامات
+ * Read the student's stored QR progress from the current lecture table.
  */
-async function loadStudentScannedQRs(studentCode, lectureNumber, tableName) {
+async function loadStudentScannedQRs(studentCode, lectureNumber, tableName, existingStudentRecord = null) {
     try {
         console.log(`📖 جاري قراءة الأكواد المحفوظة للطالب ${studentCode}...`);
-        
-        if (USE_MOCK_DATA) {
-            // قراءة من البيانات الوهمية
-            if (MOCK_LECTURES[tableName] && MOCK_LECTURES[tableName][studentCode]) {
-                const studentData = MOCK_LECTURES[tableName][studentCode];
-                
-                // تحديث حالة scannedQRs
-                scannedQRs.qr1 = studentData['1st QR'] === true;
-                scannedQRs.qr2 = studentData['2nd QR'] === true;
-                scannedQRs.qr3 = studentData['3rd QR'] === true;
-                
-                console.log('✓ تم قراءة البيانات (Mock):', scannedQRs);
-                updateQRCheckmarks();
-                return;
-            }
-        }
-        
-        // قراءة من Airtable الحقيقي
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
+
+        const response = existingStudentRecord ? null : await apiGet(
+            `/api/data/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
+            { headers: getDataHeaders() }
         );
 
-        if (response.data.records.length === 0) {
+        const studentRecord = existingStudentRecord || response?.data?.records?.[0];
+        if (!studentRecord) {
             console.warn('⚠️ لم يتم العثور على سجل الطالب');
             return;
         }
 
-        const studentRecord = response.data.records[0];
         const fields = studentRecord.fields;
 
-        // تحديث حالة scannedQRs بناءً على البيانات المحفوظة
         scannedQRs.qr1 = fields['1st QR'] === true;
         scannedQRs.qr2 = fields['2nd QR'] === true;
         scannedQRs.qr3 = fields['3rd QR'] === true;
 
-        console.log('✓ تم قراءة الأكواس المحفوظة من Airtable:', scannedQRs);
-        
-        // تحديث العلامات الثلاث على الواجهة
+        console.log('✓ تم قراءة الأكواس المحفوظة:', scannedQRs);
         updateQRCheckmarks();
-
     } catch (error) {
         console.error('❌ خطأ في قراءة البيانات المحفوظة:', error);
     }
@@ -1986,7 +1747,7 @@ async function onQRScanned(decodedText) {
         // تعيين flag المعالجة
         isProcessingQR = true;
         
-        // تحديث Airtable أولاً قبل تضييء العلامة
+        // تحديث Firestore أولاً قبل تضييء العلامة
         if (currentMode === 'student' && currentLectureNumber && currentStudentCode) {
             const tableName = `LEC_${currentLectureNumber}`; // استخدام LEC_1 أو LEC_2 إلخ
             
@@ -2000,8 +1761,14 @@ async function onQRScanned(decodedText) {
                 columnName = '3rd QR';
             }
             
-            // انتظر نتيجة التحديث في Airtable
-            const updateResult = await updateStudentAttendance(currentStudentCode, currentLectureNumber, tableName, columnName);
+            // انتظر نتيجة التحديث في Firestore
+            const updateResult = await updateStudentAttendance(
+                currentStudentCode,
+                currentLectureNumber,
+                tableName,
+                columnName,
+                currentStudentRecord
+            );
             
             // فقط إذا كان التحديث ناجحاً، قم بإضاءة العلامة
             if (updateResult) {
@@ -2099,7 +1866,7 @@ async function selectLecture() {
 }
 
 /**
- * 🎚️ تحديث حالة Toggle من Airtable
+ * 🎚️ تحديث حالة Toggle من Firestore
  */
 
 
@@ -2136,33 +1903,7 @@ function startStudentModeMonitoring() {
  */
 async function checkStudentModeStatus() {
     try {
-        if (USE_MOCK_DATA) {
-            const studentMode = safeStorage.getItem('studentMode');
-            if (studentMode === 'OFF' && currentMode === 'student') {
-                console.warn('⚠️ Mock: Student mode stopped! - Closing page...');
-                showAlert('⛔ Student mode disabled by instructor - Exiting', 'warning');
-                setTimeout(() => {
-                    exitMode();
-                }, 1500);
-            }
-            return;
-        }
-
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(MODE_TABLE)}`,
-            { headers: getAirtableHeaders() }
-        );
-
-        if (response.data.records.length === 0) {
-            console.warn('⚠️ MODE table is empty');
-            return;
-        }
-
-        let record = response.data.records.find(r => {
-            const name = r.fields.Name || '';
-            return name.trim() === MODE_RECORD_NAME.trim();
-        }) || response.data.records[0];
-
+        const record = await getModeRecord();
         if (!record) {
             console.warn('⚠️ MODE record not found');
             return;
@@ -2181,7 +1922,7 @@ async function checkStudentModeStatus() {
             }, 1500);
         }
     } catch (error) {
-        // If we hit a 429 from the proxy / Airtable, back off polling exponentially
+        // If the data route returns 429, back off polling exponentially
         const status = error.response?.status;
         if (status === 429) {
             // increase poll interval (exponential) up to 60s
@@ -2200,22 +1941,23 @@ async function checkStudentModeStatus() {
  */
 function startLectureStudentUpdates() {
     // Backoff-enabled polling for student updates
-    const baseMs = 5000; // baseline polling interval
+    const baseMs = 10000; // baseline polling interval
     const maxMs = 60000; // max backoff
     let currentMs = baseMs;
-    let timerId = null;
+    if (lectureStudentsTimer) {
+        clearTimeout(lectureStudentsTimer);
+    }
 
     async function tick() {
         if (!(currentMode === 'doctor' && currentLectureNumber)) {
-            // not in doctor view - schedule a check later
-            timerId = setTimeout(tick, currentMs);
+            lectureStudentsTimer = null;
             return;
         }
 
         try {
             await updateStudentsList();
             // if last fetch had 429 marker, increase backoff
-            if (window._lastAirtable429) {
+            if (window._lastData429) {
                 currentMs = Math.min(currentMs * 2, maxMs);
             } else {
                 // reset to baseline on success
@@ -2226,7 +1968,7 @@ function startLectureStudentUpdates() {
             currentMs = Math.min(currentMs * 2, maxMs);
         }
 
-        timerId = setTimeout(tick, currentMs);
+        lectureStudentsTimer = setTimeout(tick, Math.max(currentMs, LECTURE_REFRESH_MS));
     }
 
     // start
@@ -2251,6 +1993,16 @@ async function updateStudentsList() {
         const has3rdQR = student['3rd QR'] === true;
         return has1stQR || has2ndQR || has3rdQR;
     });
+
+    await Promise.all(attendedStudents.map(async record => {
+        const fields = record.fields || {};
+        if (getStudentName(fields)) return;
+        const code = String(fields.Code || record.id || '').trim();
+        if (!code) return;
+        const directoryStudent = await findStudent(code);
+        const directoryName = getStudentName(directoryStudent?.fields);
+        if (directoryName) fields.Name = directoryName;
+    }));
     
     if (attendedStudents.length === 0) {
         studentsList.innerHTML = '<div class="empty-list">No students have scanned QR codes yet</div>';
@@ -2260,13 +2012,22 @@ async function updateStudentsList() {
     let html = '';
     attendedStudents.forEach(record => {
         const student = record.fields;
-        const studentCode = student.Code || 'N/A';
-        const studentName = student.Name || 'Unknown';
+        const studentCode = String(student.Code || record.id || 'N/A');
+        const studentName = getStudentName(student) || 'Unknown';
         const region = student.Region || 'Unknown';
         
         // Count scanned QR codes
-        const qrCount = (student['1st QR'] ? 1 : 0) + (student['2nd QR'] ? 1 : 0) + (student['3rd QR'] ? 1 : 0);
+        const qr1Scanned = student['1st QR'] === true || student['1st QR'] === 'true';
+        const qr2Scanned = student['2nd QR'] === true || student['2nd QR'] === 'true';
+        const qr3Scanned = student['3rd QR'] === true || student['3rd QR'] === 'true';
+        const qrCount = [qr1Scanned, qr2Scanned, qr3Scanned].filter(Boolean).length;
         const qrStatus = `(${qrCount}/3 QR)`;
+        const qrIndicators = `
+            <span class="student-qr-indicators" aria-label="Scanned QR codes">
+                <span class="student-qr-dot ${qr1Scanned ? 'scanned' : ''}" title="QR 1">1</span>
+                <span class="student-qr-dot ${qr2Scanned ? 'scanned' : ''}" title="QR 2">2</span>
+                <span class="student-qr-dot ${qr3Scanned ? 'scanned' : ''}" title="QR 3">3</span>
+            </span>`;
         
         // Check if student is out of region
         const isOutRegion = region === 'Out region';
@@ -2275,7 +2036,7 @@ async function updateStudentsList() {
         html += `
             <div class="student-item ${isOutRegion ? 'out-of-region' : ''}">
                 <div class="student-info">
-                    <div class="student-name">${studentName} ${locationIndicator}</div>
+                    <div class="student-name">${studentName} ${locationIndicator} ${qrIndicators}</div>
                     <div class="student-code">Code: ${studentCode}</div>
                 </div>
                 <div class="student-status">✓ ${qrStatus}</div>
@@ -2397,17 +2158,17 @@ async function exportMultipleLectures() {
         // Fetch data from each lecture
         for (const lec of selectedLectures) {
             const students = await fetchLectureStudents(lec.lecNum);
+            await enrichStudentNamesForExport(students);
             
             students.forEach(record => {
-                const fields = record.fields;
-                const code = fields.Code;
-                const name = fields.Name;
+                const fields = record.fields || {};
+                const code = fields.Code || record.id;
+                const name = getStudentName(fields) || '---';
                 const region = fields.Region || 'Unknown';
                 
                 // Count QR codes scanned
-                const qrCount = (fields['1st QR'] === true ? 1 : 0) + 
-                               (fields['2nd QR'] === true ? 1 : 0) + 
-                               (fields['3rd QR'] === true ? 1 : 0);
+                const qrCount = [fields['1st QR'], fields['2nd QR'], fields['3rd QR']]
+                    .filter(value => value === true || value === 'true').length;
                 
                 // Mark as attended only if 2 or more QRs were scanned
                 const hasAttendance = qrCount >= 2;
@@ -2565,17 +2326,19 @@ async function exportToExcel() {
             return;
         }
 
+        await enrichStudentNamesForExport(students);
+
         // Prepare data for Excel
         const excelData = [];
         
         students.forEach(record => {
-            const fields = record.fields;
+            const fields = record.fields || {};
             excelData.push({
-                'الاسم': fields.Name || '---',
-                'الكود': fields.Code || '---',
-                '1st QR': fields['1st QR'] === true ? 'X' : '',
-                '2nd QR': fields['2nd QR'] === true ? 'X' : '',
-                '3rd QR': fields['3rd QR'] === true ? 'X' : '',
+                'الاسم': getStudentName(fields) || '---',
+                'الكود': fields.Code || record.id || '---',
+                '1st QR': fields['1st QR'] === true || fields['1st QR'] === 'true' ? 'X' : '',
+                '2nd QR': fields['2nd QR'] === true || fields['2nd QR'] === 'true' ? 'X' : '',
+                '3rd QR': fields['3rd QR'] === true || fields['3rd QR'] === 'true' ? 'X' : '',
                 'المنطقة': fields.Region || '---'
             });
         });
@@ -2721,18 +2484,19 @@ async function submitStudentCode() {
         currentLectureNumber = lectureNumber;
         const tableName = `LEC_${lectureNumber}`;
 
-        // Step 2-4: Run in parallel (permissions, student search, device IP)
-        const [permissionsGranted, student, _] = await Promise.all([
-            requestAllPermissions(),
-            findStudent(codeInput),
-            getDeviceIP()
-        ]);
-        
+        // Step 2: permissions are required before any student data is written.
+        const permissionsGranted = await requestAllPermissions();
         if (!permissionsGranted) {
             showAlert('✗ Permissions required to login', 'error');
             if (signInBtn) signInBtn.disabled = false;
             return;
         }
+
+        // Step 3: resolve the student in the selected lecture and determine the device IP.
+        const [student] = await Promise.all([
+            findStudent(codeInput, lectureNumber),
+            getDeviceIP()
+        ]);
 
         if (!student) {
             showAlert('Student code not found', 'error');
@@ -2741,23 +2505,27 @@ async function submitStudentCode() {
         }
 
         // Step 5: Security check (device IP conflict)
-        const isIPValid = await checkDeviceIPConflict(codeInput, lectureNumber);
+        const isIPValid = await checkDeviceIPConflict(codeInput, lectureNumber, student);
         if (!isIPValid) {
-            showAlert('❌ Device already registered with different code', 'error');
             if (signInBtn) signInBtn.disabled = false;
             return;
         }
 
-        // Step 6: Save data and show interface
+        // Step 6: persist IP and location before opening the student page.
         currentStudentCode = codeInput;
-        currentStudentName = student.fields?.Name || 'Unknown';
-        
-        // Save Device IP in background (don't wait)
-        saveDeviceIPForStudent(codeInput, lectureNumber).catch(err => {
-            console.warn('Warning saving device IP:', err);
-        });
-        
-        // Show interface immediately
+        currentStudentRecord = student;
+        currentStudentName = getStudentName(student.fields) || 'Unknown';
+        const savedLoginData = await saveStudentLoginData(
+            codeInput,
+            lectureNumber,
+            currentStudentName,
+            student
+        );
+        if (!savedLoginData) {
+            showAlert('❌ تعذر حفظ بيانات الجهاز والموقع. لم يتم فتح صفحة الطالب.', 'error');
+            return;
+        }
+
         await showStudentInterface();
 
     } catch (error) {
@@ -2768,28 +2536,6 @@ async function submitStudentCode() {
     }
 }
 
-/**
- * Optimized student finder - searches STUDENTS_TABLE (المرجع الأساسي)
- */
-async function findStudent(studentCode) {
-    // إذا كنا نستخدم البيانات الوهمية، ابحث فيها أولاً
-    if (USE_MOCK_DATA && MOCK_STUDENTS[studentCode]) {
-        return MOCK_STUDENTS[studentCode];
-    }
-
-    try {
-        // البحث في جدول الطلاب الأساسي (STUDENTS_TABLE)
-        const response = await axios.get(
-            `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(STUDENTS_TABLE)}?filterByFormula=({Code}='${studentCode}')`,
-            { headers: getAirtableHeaders() }
-        );
-        
-        return response.data.records.length > 0 ? response.data.records[0] : null;
-    } catch (error) {
-        console.error('Error searching for student:', error);
-        return null;
-    }
-}
 /**
  * Start periodic geographic location tracking
  */
@@ -2821,27 +2567,20 @@ document.addEventListener('DOMContentLoaded', async function() {
     safeStorage.removeItem('device-id');
     safeStorage.removeItem('device_ip');
     safeStorage.removeItem('cached_ip');
-    
-    // Try to remove any other keys that match patterns; safeStorage handles failures
+
+    // Safely enumerate storage keys only when localStorage is actually available.
     try {
-        for (let key in localStorage) {
-            if (key.includes('device') || key.includes('local') || key.includes('ip') || key.match(/^local-|^device-/)) {
-                safeStorage.removeItem(key);
-            }
+        if (_localStorageAvailable && typeof window !== 'undefined' && window.localStorage) {
+            const storageKeys = Object.keys(window.localStorage);
+            storageKeys.forEach((key) => {
+                if (key.includes('device') || key.includes('local') || key.includes('ip') || /^local-|^device-/.test(key)) {
+                    safeStorage.removeItem(key);
+                }
+            });
         }
     } catch (e) {
-        // If localStorage iteration is blocked, remove common keys explicitly
+        _localStorageAvailable = false;
         ['mock_lectures','selectedLecture','selectedQR','studentMode','lectureSelected','mock_ram'].forEach(k => safeStorage.removeItem(k));
-    }
-    
-    // Initialize mock data
-    initMockData();
-    
-    // Display operation mode message
-    if (USE_MOCK_DATA) {
-        console.log('🔄 System running with Mock Data');
-    } else {
-        console.log('🔗 System running with real Airtable');
     }
     
     // 🔐 Check Website Protection Status FIRST (one-time check)

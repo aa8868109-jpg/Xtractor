@@ -1,7 +1,12 @@
 .env
+.env.*
+!.env.example
 node_modules
 .venv
 .vercel
 install.log
 *.log
+firebase-service-account.json
+server.out
+server.err
 vendor/
