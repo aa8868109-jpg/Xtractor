@@ -2,7 +2,25 @@ const { getFirestore } = require('./firebase');
 
 // Simple in-memory cache — per-instance, short TTL
 const CACHE_TTL_MS = 30 * 1000;
+const API_VERSION = 'firebase-runtime-v3';
 if (!global._protectionCache) global._protectionCache = { ts: 0, data: null };
+
+function classifyFirebaseError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  const code = String(error?.code || '').toLowerCase();
+  if (message.includes('credentials') || message.includes('json') || message.includes('private key') ||
+      message.includes('invalid_grant') || message.includes('invalid pem') || message.includes('certificate') ||
+      message.includes('unauthenticated') || message.includes('invalid authentication') ||
+      message.includes('could not load the default') || code === '16' || code.includes('auth')) {
+    return 'firebase_credentials_invalid';
+  }
+  if (message.includes('permission') || message.includes('permission_denied') ||
+      code === '7' || code.includes('permission')) {
+    return 'firestore_permission_denied';
+  }
+  if (message.includes('not_found') || code === '5') return 'firestore_not_found';
+  return 'firestore_fetch_failed';
+}
 
 module.exports = async function handler(req, res) {
   try {
@@ -24,23 +42,9 @@ module.exports = async function handler(req, res) {
       return res.json({ success: true, used: 'firestore', data: global._protectionCache.data });
     } catch (err) {
       console.error('Protection handler firestore read error:', err && err.message ? err.message : err);
-      const message = String(err?.message || '');
-      const normalizedMessage = message.toLowerCase();
-      const errorCode = String(err?.code || '').toLowerCase();
-      const error = normalizedMessage.includes('credentials') || normalizedMessage.includes('json') ||
-        normalizedMessage.includes('private key') || normalizedMessage.includes('invalid_grant') ||
-        normalizedMessage.includes('invalid pem') || normalizedMessage.includes('certificate') ||
-        errorCode.includes('auth')
-        ? 'firebase_credentials_invalid'
-        : normalizedMessage.includes('permission') || normalizedMessage.includes('permission_denied') ||
-          errorCode === '7' || errorCode.includes('permission')
-          ? 'firestore_permission_denied'
-          : normalizedMessage.includes('not_found') || errorCode === '5'
-            ? 'firestore_not_found'
-          : 'firestore_fetch_failed';
-      return res.status(500).json({ success: false, error });
+      return res.status(500).json({ success: false, error: classifyFirebaseError(err), version: API_VERSION });
     }
   } catch (err) {
-    return res.status(500).json({ success: false, error: err.message || err });
+    return res.status(500).json({ success: false, error: classifyFirebaseError(err), version: API_VERSION });
   }
 };
