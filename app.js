@@ -15,7 +15,6 @@ let protectionCheckInterval = null;
 let isWebsiteLocked = false;
 let lockMessage = '';
 let lockLink = '';
-let doctorPassword = '';
 
 // Runtime traffic is routed through the Firestore proxy only.
 
@@ -383,10 +382,6 @@ async function checkWebsiteProtectionStatus() {
         isWebsiteLocked = protectionStatus === 'Lock';
         lockMessage = fields.Text || 'Website is currently locked';
         lockLink = fields.Link || '';
-        doctorPassword = fields.Password || DOCTOR_CODE;
-        // Normalize to string to avoid type mismatches (number vs string)
-        DOCTOR_CODE = String(doctorPassword).trim();
-
         console.log(`🔐 Protection Status: ${isWebsiteLocked ? 'LOCKED' : 'UNLOCKED'}`);
         return true;
     } catch (error) {
@@ -2465,8 +2460,11 @@ async function submitStudentCode() {
             return;
         }
 
-        // Doctor code check after confirming site is not locked
-        if (String(codeInput).trim() === String(DOCTOR_CODE).trim()) {
+        // Verify doctor credentials on the server; never expose the password to the browser.
+        const authResponse = await axios.post('/api/auth', { code: codeInput }, {
+            headers: getDataHeaders()
+        }).catch(() => null);
+        if (authResponse?.data?.authenticated && authResponse.data.role === 'doctor') {
             showDoctorInterface();
             if (signInBtn) signInBtn.disabled = false;
             return;

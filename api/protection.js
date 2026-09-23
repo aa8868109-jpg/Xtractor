@@ -20,7 +20,7 @@ module.exports = async function handler(req, res) {
       }
       const data = doc.data();
       global._protectionCache.ts = Date.now();
-      global._protectionCache.data = { records: [{ id: 'Xtractor Website Protection', fields: { Select: data.Website_Status ? 'Unlock' : 'Lock', Text: data.Text || '', Link: data.Link || '', Password: data.Dr_Pass || '' } }] };
+      global._protectionCache.data = { records: [{ id: 'Xtractor Website Protection', fields: { Select: data.Website_Status ? 'Unlock' : 'Lock', Text: data.Text || '', Link: data.Link || '' } }] };
       return res.json({ success: true, used: 'firestore', data: global._protectionCache.data });
     } catch (err) {
       console.error('Protection handler firestore read error:', err && err.message ? err.message : err);

@@ -1,5 +1,6 @@
 const protectionHandler = require('./protection');
 const dataHandler = require('./data/[...slug]');
+const authHandler = require('./auth');
 
 module.exports = async function handler(req, res) {
   try {
@@ -8,6 +9,10 @@ module.exports = async function handler(req, res) {
 
     if (pathname === '/api/protection' || pathname.startsWith('/api/protection/')) {
       return protectionHandler(req, res);
+    }
+
+    if (pathname === '/api/auth') {
+      return authHandler(req, res);
     }
 
     if (pathname.startsWith('/api/data/')) {

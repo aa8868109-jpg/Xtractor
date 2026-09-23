@@ -1391,9 +1391,9 @@
     </div><!-- /.container -->
 
     <script>
-        // Load app.js with a cache-busting query string so the browser always fetches the latest version
+        // Load the production bundle with a cache-busting query string.
         const _appScript = document.createElement('script');
-        _appScript.src = `app.js?_cb=${Date.now()}`;
+        _appScript.src = `app.min.js?_cb=${Date.now()}`;
         document.body.appendChild(_appScript);
     </script>
 

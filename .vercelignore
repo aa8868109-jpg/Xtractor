@@ -1,0 +1,5 @@
+app.js
+*.map
+.env*
+firebase-service-account.json
+server.*
