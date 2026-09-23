@@ -50,18 +50,28 @@ function getFirestore() {
     if (firestore) return firestore;
 
     let app;
-    if (!admin.apps.length) {
-        const serviceAccount = loadServiceAccount();
-        app = admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount),
-            projectId: serviceAccount.projectId
-        });
-    } else {
-        app = admin.app();
+    try {
+        if (!admin.apps.length) {
+            const serviceAccount = loadServiceAccount();
+            app = admin.initializeApp({
+                credential: admin.credential.cert(serviceAccount),
+                projectId: serviceAccount.projectId
+            });
+        } else {
+            app = admin.app();
+        }
+    } catch (error) {
+        error.firebasePhase = 'admin_initialize';
+        throw error;
     }
 
-    firestore = initializeFirestore(app, { preferRest: true });
-    return firestore;
+    try {
+        firestore = initializeFirestore(app, { preferRest: true });
+        return firestore;
+    } catch (error) {
+        error.firebasePhase = 'firestore_initialize';
+        throw error;
+    }
 }
 
 module.exports = { getFirestore };

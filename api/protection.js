@@ -26,6 +26,7 @@ function safeFirebaseDiagnostic(error) {
   return {
     name: String(error?.name || 'Error').slice(0, 80),
     code: String(error?.code || 'unknown').slice(0, 80),
+    phase: String(error?.firebasePhase || 'firestore_read').slice(0, 40),
     message: String(error?.message || 'unknown').replace(/[\r\n]+/g, ' ').slice(0, 160)
   };
 }
