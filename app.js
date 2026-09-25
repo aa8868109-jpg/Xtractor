@@ -1426,6 +1426,8 @@ async function enrichStudentNamesForExport(records) {
 async function loadStudentScannedQRs(studentCode, lectureNumber, tableName, existingStudentRecord = null) {
     try {
         console.log(`📖 جاري قراءة الأكواد المحفوظة للطالب ${studentCode}...`);
+        scannedQRs = { qr1: false, qr2: false, qr3: false };
+        updateQRCheckmarks();
 
         const response = existingStudentRecord ? null : await apiGet(
             `/api/data/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
@@ -1438,11 +1440,12 @@ async function loadStudentScannedQRs(studentCode, lectureNumber, tableName, exis
             return;
         }
 
-        const fields = studentRecord.fields;
+        const fields = studentRecord.fields || {};
+        const isRecorded = value => value === true || value === 'true' || value === 1 || value === '1';
 
-        scannedQRs.qr1 = fields['1st QR'] === true;
-        scannedQRs.qr2 = fields['2nd QR'] === true;
-        scannedQRs.qr3 = fields['3rd QR'] === true;
+        scannedQRs.qr1 = isRecorded(fields['1st QR'] ?? fields['1st_QR'] ?? fields.qr_1);
+        scannedQRs.qr2 = isRecorded(fields['2nd QR'] ?? fields['2nd_QR'] ?? fields.qr_2);
+        scannedQRs.qr3 = isRecorded(fields['3rd QR'] ?? fields['3rd_QR'] ?? fields.qr_3);
 
         console.log('✓ تم قراءة الأكواس المحفوظة:', scannedQRs);
         updateQRCheckmarks();
