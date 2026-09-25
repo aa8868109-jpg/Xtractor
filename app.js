@@ -41,70 +41,84 @@ let currentMode = null; // 'student' or 'doctor'
 let currentStudentCode = null;
 let currentStudentName = null; // To save student name
 let currentStudentRecord = null;
-// Safe storage wrapper: uses localStorage when available, falls back to in-memory object
+// Safe storage wrapper: prefers sessionStorage, then localStorage, then in-memory object
 const _inMemoryStorage = {};
-// Detect localStorage availability once to avoid repeated browser blocking messages
 let _localStorageAvailable = false;
-function detectLocalStorageAvailability() {
+let _sessionStorageAvailable = false;
+
+function detectStorageAvailability() {
     try {
         const testKey = '__xtractor_storage_test__';
-        localStorage.setItem(testKey, '1');
-        localStorage.removeItem(testKey);
-        _localStorageAvailable = true;
+        if (window && window.sessionStorage) {
+            window.sessionStorage.setItem(testKey, '1');
+            window.sessionStorage.removeItem(testKey);
+            _sessionStorageAvailable = true;
+        }
+    } catch (e) {
+        _sessionStorageAvailable = false;
+    }
+
+    try {
+        const testKey = '__xtractor_storage_test__';
+        if (window && window.localStorage) {
+            window.localStorage.setItem(testKey, '1');
+            window.localStorage.removeItem(testKey);
+            _localStorageAvailable = true;
+        }
     } catch (e) {
         _localStorageAvailable = false;
     }
 }
-try { detectLocalStorageAvailability(); } catch (e) { _localStorageAvailable = false; }
+try { detectStorageAvailability(); } catch (e) { _localStorageAvailable = false; _sessionStorageAvailable = false; }
 
 const safeStorage = {
     getItem(key) {
-        if (_localStorageAvailable) return localStorage.getItem(key);
+        if (_sessionStorageAvailable && window && window.sessionStorage) {
+            try { return window.sessionStorage.getItem(key); } catch (e) {}
+        }
+        if (_localStorageAvailable && window && window.localStorage) {
+            try { return window.localStorage.getItem(key); } catch (e) {}
+        }
         return _inMemoryStorage[key] ?? null;
     },
     setItem(key, value) {
-        if (_localStorageAvailable) return localStorage.setItem(key, String(value));
-        _inMemoryStorage[key] = String(value);
+        const normalizedValue = String(value);
+        if (_sessionStorageAvailable && window && window.sessionStorage) {
+            try { window.sessionStorage.setItem(key, normalizedValue); return; } catch (e) {}
+        }
+        if (_localStorageAvailable && window && window.localStorage) {
+            try { window.localStorage.setItem(key, normalizedValue); return; } catch (e) {}
+        }
+        _inMemoryStorage[key] = normalizedValue;
     },
     removeItem(key) {
-        if (_localStorageAvailable) return localStorage.removeItem(key);
+        if (_sessionStorageAvailable && window && window.sessionStorage) {
+            try { window.sessionStorage.removeItem(key); } catch (e) {}
+        }
+        if (_localStorageAvailable && window && window.localStorage) {
+            try { window.localStorage.removeItem(key); } catch (e) {}
+        }
         delete _inMemoryStorage[key];
     }
 };
 
-// If localStorage is unavailable (Tracking Prevention), install safe shim
 function installLocalStorageShim() {
     try {
-        if (_localStorageAvailable) return;
-        // Avoid double-patching
-        if (Storage.prototype.__xtractor_shim_installed__) return;
+        if (_localStorageAvailable && _sessionStorageAvailable) return;
+        if (Storage && Storage.prototype && Storage.prototype.__xtractor_shim_installed__) return;
 
-        Storage.prototype.__xtractor_shim_installed__ = true;
-
-        Storage.prototype.getItem = function(key) {
-            return _inMemoryStorage[key] ?? null;
-        };
-        Storage.prototype.setItem = function(key, value) {
-            _inMemoryStorage[key] = String(value);
-        };
-        Storage.prototype.removeItem = function(key) {
-            delete _inMemoryStorage[key];
-        };
-        // Provide key() and length to be minimally compatible
-        Storage.prototype.key = function(i) {
-            const keys = Object.keys(_inMemoryStorage);
-            return keys[i] || null;
-        };
-        Object.defineProperty(Storage.prototype, 'length', {
-            get: function() { return Object.keys(_inMemoryStorage).length; }
-        });
-    } catch (e) {
-        // ignore shim errors
-    }
+        if (Storage && Storage.prototype) {
+            Storage.prototype.__xtractor_shim_installed__ = true;
+            Storage.prototype.getItem = function(key) { return _inMemoryStorage[key] ?? null; };
+            Storage.prototype.setItem = function(key, value) { _inMemoryStorage[key] = String(value); };
+            Storage.prototype.removeItem = function(key) { delete _inMemoryStorage[key]; };
+            Storage.prototype.key = function(i) { const keys = Object.keys(_inMemoryStorage); return keys[i] || null; };
+            Object.defineProperty(Storage.prototype, 'length', { get: function() { return Object.keys(_inMemoryStorage).length; } });
+        }
+    } catch (e) {}
 }
 
-// Ensure shim is installed early if storage unavailable
-try { if (!_localStorageAvailable) installLocalStorageShim(); } catch (e) {}
+try { if (!_localStorageAvailable && !_sessionStorageAvailable) installLocalStorageShim(); } catch (e) {}
 
 // ====== API Request Manager (coalescing + backoff) ======
 const _inFlightRequests = new Map();
@@ -133,6 +147,16 @@ function _defaultMinInterval(url) {
 
 async function apiGet(url, config = {}) {
     const key = _normalizeUrlKey(url);
+    const sessionToken = safeStorage.getItem('xtractor_session_token');
+    if (sessionToken && !config.headers?.Authorization && !config.headers?.authorization) {
+        config = {
+            ...config,
+            headers: {
+                ...(config.headers || {}),
+                Authorization: `Bearer ${sessionToken}`
+            }
+        };
+    }
 
     // If currently backing off for this key, throw a 429-like error immediately
     const blockedUntil = _backoffUntil.get(key) || 0;
@@ -1143,25 +1167,55 @@ function getDataHeaders() {
     return { 'Content-Type': 'application/json' };
 }
 
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 function getStudentName(fields = {}) {
+    if (!fields || typeof fields !== 'object') return '';
+
     const candidates = [
+        fields.Name,
         fields.name,
         fields['Student Name'],
         fields['Full Name'],
-        fields.Name,
         fields.StudentName,
         fields.studentName,
         fields.Student_Name,
         fields.student_name,
         fields['اسم الطالب']
     ];
+
     const namedField = Object.entries(fields).find(([key, value]) => {
         const normalizedKey = key.toLowerCase().replace(/[\s_-]/g, '');
         return (normalizedKey === 'name' || normalizedKey === 'studentname' || normalizedKey === 'fullname') &&
             value !== undefined && value !== null && String(value).trim();
     });
+
     const name = candidates.find(value => value !== undefined && value !== null && String(value).trim()) || namedField?.[1];
     return name ? String(name).trim() : '';
+}
+
+function normalizeStudentNameField(fields = {}) {
+    if (!fields || typeof fields !== 'object') return fields;
+    const name = getStudentName(fields);
+    if (!name) return fields;
+
+    if (!Object.prototype.hasOwnProperty.call(fields, 'Name') && Object.prototype.hasOwnProperty.call(fields, 'name')) {
+        fields.Name = fields.name;
+    }
+    if (!Object.prototype.hasOwnProperty.call(fields, 'name') && Object.prototype.hasOwnProperty.call(fields, 'Name')) {
+        fields.name = fields.Name;
+    }
+    if (!Object.prototype.hasOwnProperty.call(fields, 'Name')) {
+        fields.Name = name;
+    }
+    return fields;
 }
 
 /**
@@ -1290,7 +1344,8 @@ async function addStudentToLecture(studentCode, lectureNumber, tableName) {
         const studentRecord = await findStudent(studentCode);
         if (!studentRecord) return null;
 
-        const studentName = getStudentName(studentRecord.fields || '');
+        normalizeStudentNameField(studentRecord.fields || {});
+        const studentName = getStudentName(studentRecord.fields || {});
 
         const response = await axios.post(
             `/api/data/${encodeURIComponent(tableName)}`,
@@ -1983,7 +2038,10 @@ async function updateStudentsList() {
         const studentCode = String(student.Code || record.id || 'N/A');
         const studentName = getStudentName(student) || 'Unknown';
         const region = student.Region || 'Unknown';
-        
+
+        const safeStudentName = escapeHtml(studentName);
+        const safeStudentCode = escapeHtml(studentCode);
+
         // Count scanned QR codes
         const qr1Scanned = student['1st QR'] === true || student['1st QR'] === 'true';
         const qr2Scanned = student['2nd QR'] === true || student['2nd QR'] === 'true';
@@ -1996,16 +2054,16 @@ async function updateStudentsList() {
                 <span class="student-qr-dot ${qr2Scanned ? 'scanned' : ''}" title="QR 2">2</span>
                 <span class="student-qr-dot ${qr3Scanned ? 'scanned' : ''}" title="QR 3">3</span>
             </span>`;
-        
+
         // Check if student is out of region
         const isOutRegion = region === 'Out region';
         const locationIndicator = isOutRegion ? '<span class="location-alert-indicator" title="Student is out of region">📍</span>' : '';
-        
+
         html += `
             <div class="student-item ${isOutRegion ? 'out-of-region' : ''}">
                 <div class="student-info">
-                    <div class="student-name">${studentName} ${locationIndicator} ${qrIndicators}</div>
-                    <div class="student-code">Code: ${studentCode}</div>
+                    <div class="student-name">${safeStudentName} ${locationIndicator} ${qrIndicators}</div>
+                    <div class="student-code">Code: ${safeStudentCode}</div>
                 </div>
                 <div class="student-status">✓ ${qrStatus}</div>
             </div>
@@ -2438,6 +2496,10 @@ async function submitStudentCode() {
             headers: getDataHeaders(),
             validateStatus: status => status < 500
         }).catch(() => null);
+        const token = authResponse?.data?.token || '';
+        if (token) {
+            safeStorage.setItem('xtractor_session_token', token);
+        }
         if (authResponse?.data?.authenticated && authResponse.data.role === 'doctor') {
             showDoctorInterface();
             if (signInBtn) signInBtn.disabled = false;

@@ -1,4 +1,20 @@
 const { getFirestore } = require('../firebase');
+const { validateSessionToken } = require('../session');
+
+function requireSession(req, res) {
+  const session = validateSessionToken(req);
+  if (!session) {
+    res.status(401).json({ error: 'unauthorized', message: 'Valid session required.' });
+    return null;
+  }
+
+  if (session.role !== 'doctor') {
+    res.status(403).json({ error: 'forbidden', message: 'Permission denied.' });
+    return null;
+  }
+
+  return session;
+}
 
 function getParts(req) {
   const raw = req.query?.slug || req.params?.slug;
@@ -39,6 +55,9 @@ function toFirestore(fields) {
 
 module.exports = async function handler(req, res) {
   try {
+    const session = requireSession(req, res);
+    if (!session) return;
+
     const firestore = getFirestore();
     const parts = getParts(req);
     if (parts.length < 1) return res.status(400).json({ error: 'invalid_data_path' });
@@ -56,11 +75,19 @@ module.exports = async function handler(req, res) {
     if (collection === 'MODE') {
       const ref = firestore.collection('MODE').doc('Website Status');
       if (method === 'GET') {
+        if (session.role !== 'doctor' && session.role !== 'student') {
+          return res.status(403).json({ error: 'forbidden_role' });
+        }
         const snap = await ref.get();
         if (!snap.exists) return res.status(404).json({ error: 'mode_not_found' });
         const data = snap.data();
         return res.json({ records: [{ id: snap.id, fields: { 'Student Mode': data.Student_Mode === true ? 'ON' : 'OFF', Lecture: data.Lecture || null, 'QR Selected': data.QR_Selected || 'NONE', Name: data.Name || 'Website Status' } }] });
       }
+
+      if (session.role !== 'doctor') {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+
       const fields = req.body?.fields || req.body || {};
       const updates = {};
       if (fields['Student Mode'] !== undefined) updates.Student_Mode = fields['Student Mode'] === 'ON' || fields['Student Mode'] === true;
@@ -74,12 +101,24 @@ module.exports = async function handler(req, res) {
     }
 
     if (!/^LEC_\d+$/i.test(collection)) return res.status(404).json({ error: 'collection_not_found' });
+
     const ref = firestore.collection(collection);
     const params = new URL(req.url || '/', 'http://localhost').searchParams;
     const formula = params.get('filterByFormula') || '';
     const match = formula.match(/^\{([^}]+)\}='([^']*)'$/) || formula.match(/^\(\{([^}]+)\}='([^']*)'\)$/);
 
+    if (session.role !== 'doctor' && session.role !== 'student') {
+      return res.status(403).json({ error: 'forbidden_role' });
+    }
+
     if (method === 'GET') {
+      if (session.role === 'student') {
+        const requestedCode = match && match[1] === 'Code' ? match[2] : null;
+        if (!requestedCode || requestedCode !== session.userCode) {
+          return res.status(403).json({ error: 'student_insufficient_scope' });
+        }
+      }
+
       if (match && match[1] === 'Code') {
         const snap = await ref.doc(match[2]).get();
         return res.json({ records: snap.exists ? [toRecord(snap, collection)] : [] });
@@ -88,11 +127,24 @@ module.exports = async function handler(req, res) {
         const snaps = await ref.where('Device_ip', '==', match[2]).get();
         return res.json({ records: snaps.docs.map(doc => toRecord(doc, collection)) });
       }
+      if (session.role === 'student') {
+        return res.status(403).json({ error: 'student_not_allowed_to_read_all_records' });
+      }
       const snaps = await ref.get();
       return res.json({ records: snaps.docs.map(doc => toRecord(doc, collection)) });
     }
 
     if (method === 'PATCH' || method === 'PUT') {
+      if (session.role === 'student') {
+        if (!documentId) return res.status(400).json({ error: 'missing_document_id' });
+        const current = await ref.doc(documentId).get();
+        if (!current.exists) return res.status(404).json({ error: 'record_not_found' });
+        const currentCode = String(current.data().Code || '').trim();
+        if (currentCode !== session.userCode) {
+          return res.status(403).json({ error: 'student_forbidden' });
+        }
+      }
+
       if (!documentId) return res.status(400).json({ error: 'missing_document_id' });
       const fields = req.body?.fields || req.body || {};
       await ref.doc(documentId).set(toFirestore(fields), { merge: true });
@@ -100,6 +152,9 @@ module.exports = async function handler(req, res) {
     }
 
     if (method === 'POST') {
+      if (session.role === 'student') {
+        return res.status(403).json({ error: 'student_cannot_create_records' });
+      }
       const records = req.body?.records || [req.body || {}];
       const created = [];
       for (const item of records) {
