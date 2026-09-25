@@ -1,8 +1,14 @@
 const { getFirestore } = require('../firebase');
 
 function getParts(req) {
-  const raw = req.query?.slug || req.params?.slug || '';
-  return (Array.isArray(raw) ? raw : String(raw).split('/')).filter(Boolean).map(decodeURIComponent);
+  const raw = req.query?.slug || req.params?.slug;
+  if (raw) {
+    return (Array.isArray(raw) ? raw : String(raw).split('/')).filter(Boolean).map(decodeURIComponent);
+  }
+
+  const pathname = String(req.url || '').split('?')[0];
+  const dataPath = pathname.match(/\/api\/data\/(.*)$/)?.[1] || '';
+  return dataPath.split('/').filter(Boolean).map(decodeURIComponent);
 }
 
 function toRecord(doc, collection = '') {
