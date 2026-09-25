@@ -2494,11 +2494,12 @@ async function submitStudentCode() {
         // Verify doctor credentials on the server; never expose the password to the browser.
         const authResponse = await axios.post('/api/auth', { code: codeInput }, {
             headers: getDataHeaders(),
-            validateStatus: status => status < 500
+            validateStatus: status => status < 500,
+            withCredentials: true
         }).catch(() => null);
         const token = authResponse?.data?.token || '';
         if (token) {
-            safeStorage.setItem('xtractor_session_token', token);
+            try { safeStorage.setItem('xtractor_session_token', token); } catch (e) {}
         }
         if (authResponse?.data?.authenticated && authResponse.data.role === 'doctor') {
             showDoctorInterface();

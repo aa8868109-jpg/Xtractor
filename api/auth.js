@@ -1,11 +1,19 @@
 const crypto = require('crypto');
 const { getFirestore } = require('./firebase');
-const { createSessionToken } = require('./session');
+const { SESSION_COOKIE_NAME, createSessionToken } = require('./session');
 
 function safeEqual(left, right) {
     const leftBuffer = Buffer.from(String(left || ''));
     const rightBuffer = Buffer.from(String(right || ''));
     return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function setSessionCookie(res, token) {
+    const isProduction = process.env.NODE_ENV === 'production';
+    res.setHeader(
+      'Set-Cookie',
+      `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600; ${isProduction ? 'Secure;' : ''}`
+    );
 }
 
 module.exports = async function handler(req, res) {
@@ -28,6 +36,7 @@ module.exports = async function handler(req, res) {
 
         if (safeEqual(submittedCode, expectedPassword)) {
             const token = createSessionToken({ role: 'doctor', userCode: submittedCode, issuedAt: Date.now() });
+            setSessionCookie(res, token);
             return res.json({ authenticated: true, role: 'doctor', token });
         }
 
@@ -47,6 +56,7 @@ module.exports = async function handler(req, res) {
         }
 
         const token = createSessionToken({ role: 'student', userCode: submittedCode, lecture: lectureNumber, issuedAt: Date.now() });
+        setSessionCookie(res, token);
         return res.json({ authenticated: true, role: 'student', token });
     } catch (error) {
         console.error('Authentication error:', error.message || error);
