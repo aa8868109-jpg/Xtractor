@@ -1951,13 +1951,14 @@ async function updateStudentsList() {
     
     const students = await fetchLectureStudents(currentLectureNumber);
     const studentsList = document.getElementById('students-list');
+    const isRecorded = value => value === true || value === 'true' || value === 1 || value === '1';
     
     // Filter students - show only those with at least one QR code true
     const attendedStudents = students.filter(record => {
-        const student = record.fields;
-        const has1stQR = student['1st QR'] === true;
-        const has2ndQR = student['2nd QR'] === true;
-        const has3rdQR = student['3rd QR'] === true;
+        const student = record.fields || {};
+        const has1stQR = isRecorded(student['1st QR'] ?? student['1st_QR'] ?? student.qr_1);
+        const has2ndQR = isRecorded(student['2nd QR'] ?? student['2nd_QR'] ?? student.qr_2);
+        const has3rdQR = isRecorded(student['3rd QR'] ?? student['3rd_QR'] ?? student.qr_3);
         return has1stQR || has2ndQR || has3rdQR;
     });
 
