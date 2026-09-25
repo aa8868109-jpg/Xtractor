@@ -2462,7 +2462,8 @@ async function submitStudentCode() {
 
         // Verify doctor credentials on the server; never expose the password to the browser.
         const authResponse = await axios.post('/api/auth', { code: codeInput }, {
-            headers: getDataHeaders()
+            headers: getDataHeaders(),
+            validateStatus: status => status < 500
         }).catch(() => null);
         if (authResponse?.data?.authenticated && authResponse.data.role === 'doctor') {
             showDoctorInterface();
