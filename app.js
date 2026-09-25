@@ -647,43 +647,9 @@ async function selectQRCode(qrValue) {
  */
 async function updateSelectedQR(lectureNumber, qrValue) {
     try {
-        // البحث عن السجل في جدول MODE
-        console.log('🔍 جاري البحث في جدول MODE...');
-        const response = await apiGet(
-              `/api/data/${encodeURIComponent(MODE_TABLE)}`,
-            { headers: getDataHeaders() }
-        );
-
-        // Defensive: ensure records exists
-        if (!response || !response.data || !Array.isArray(response.data.records) || response.data.records.length === 0) {
-            console.error('❌ No records found or invalid response from MODE table', response && response.data);
-            showAlert('❌ MODE table is empty or response invalid', 'error');
-            return false;
-        }
-
-        // Search for the correct record
-        let record = response.data.records.find(r => {
-            const name = r.fields.Name || '';
-            return name.trim() === MODE_RECORD_NAME.trim();
-        });
-        
-        if (!record && response.data.records.length === 1) {
-            console.warn('⚠️ Using the only record in the table');
-            record = response.data.records[0];
-        }
-        
-        if (!record) {
-            console.error(`❌ Record with name "${MODE_RECORD_NAME}" not found`);
-            return false;
-        }
-
-        const recordId = record.id;
         const studentMode = qrValue === 'NONE' ? 'OFF' : 'ON';
 
-        console.log('✓ Record found, updating...');
-
-        // تحديث السجل
-        const updateResponse = await axios.patch(
+        await axios.patch(
             `/api/data/${encodeURIComponent(MODE_TABLE)}`,
             {
                 fields: {
