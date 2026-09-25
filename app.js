@@ -571,7 +571,7 @@ async function updateStudentMode(lectureNumber, isEnabled) {
 
         // تحديث السجل
         const updateResponse = await axios.patch(
-            `/api/data/${encodeURIComponent(MODE_TABLE)}/${recordId}`,
+            `/api/data/${encodeURIComponent(MODE_TABLE)}`,
             {
                 fields: {
                     'Lecture': isEnabled ? String(lectureNumber) : null,
@@ -684,7 +684,7 @@ async function updateSelectedQR(lectureNumber, qrValue) {
 
         // تحديث السجل
         const updateResponse = await axios.patch(
-            `/api/data/${encodeURIComponent(MODE_TABLE)}/${recordId}`,
+            `/api/data/${encodeURIComponent(MODE_TABLE)}`,
             {
                 fields: {
                     'Lecture': String(lectureNumber),
