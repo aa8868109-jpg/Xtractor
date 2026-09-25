@@ -1145,10 +1145,10 @@ function getDataHeaders() {
 
 function getStudentName(fields = {}) {
     const candidates = [
-        fields.Name,
+        fields.name,
         fields['Student Name'],
         fields['Full Name'],
-        fields.name,
+        fields.Name,
         fields.StudentName,
         fields.studentName,
         fields.Student_Name,
@@ -1290,7 +1290,7 @@ async function addStudentToLecture(studentCode, lectureNumber, tableName) {
         const studentRecord = await findStudent(studentCode);
         if (!studentRecord) return null;
 
-        const studentName = studentRecord.fields.Name || '';
+        const studentName = getStudentName(studentRecord.fields || '');
 
         const response = await axios.post(
             `/api/data/${encodeURIComponent(tableName)}`,
