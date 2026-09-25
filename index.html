@@ -1391,9 +1391,12 @@
     </div><!-- /.container -->
 
     <script>
-        // Load the production bundle with a cache-busting query string.
+        // Load the current app source instead of the stale minified bundle.
+        // The production server is still serving an older app.min.js in some deployments,
+        // so we intentionally bypass that cache issue and use the live source file.
         const _appScript = document.createElement('script');
-        _appScript.src = `app.min.js?_cb=${Date.now()}`;
+        const _appSource = 'app.js';
+        _appScript.src = `${_appSource}?_cb=${Date.now()}`;
         document.body.appendChild(_appScript);
     </script>
 
