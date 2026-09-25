@@ -1249,8 +1249,9 @@ async function saveStudentLoginData(studentCode, lectureNumber, studentName, stu
         const mapsLink = `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`;
         const region = checkGeographicRegion();
         await axios.patch(
-            `/api/data/${encodeURIComponent(tableName)}/${studentRecord.id}`,
+            `/api/data/${encodeURIComponent(tableName)}`,
             {
+                id: studentRecord.id,
                 fields: {
                     'Device IP': deviceIP || 'Unknown',
                     'Location': mapsLink,
@@ -1290,8 +1291,9 @@ async function updateStudentAttendance(studentCode, lectureNumber, tableName, co
         const region = checkGeographicRegion();
 
         const updateResponse = await axios.patch(
-            `/api/data/${encodeURIComponent(tableName)}/${recordId}`,
+            `/api/data/${encodeURIComponent(tableName)}`,
             {
+                id: recordId,
                 fields: {
                     [columnName]: true,
                     'Location': mapsLink,
@@ -1377,8 +1379,9 @@ async function updateStudentLocation(studentCode, lectureNumber) {
             const regionStatus = checkGeographicRegion();
 
             await axios.patch(
-                `/api/data/${encodeURIComponent(tableName)}/${recordId}`,
+                `/api/data/${encodeURIComponent(tableName)}`,
                 {
+                    id: recordId,
                     fields: {
                         'Location': mapsLink,
                         'Region': regionStatus,

@@ -43,7 +43,7 @@ module.exports = async function handler(req, res) {
     const parts = getParts(req);
     if (parts.length < 1) return res.status(400).json({ error: 'invalid_data_path' });
     const collection = parts[0];
-    const documentId = parts[1] || null;
+    const documentId = parts[1] || req.body?.id || req.body?.recordId || null;
     const method = (req.method || 'GET').toUpperCase();
 
     if (collection === 'Protection') {
@@ -94,7 +94,8 @@ module.exports = async function handler(req, res) {
 
     if (method === 'PATCH' || method === 'PUT') {
       if (!documentId) return res.status(400).json({ error: 'missing_document_id' });
-      await ref.doc(documentId).set(toFirestore(req.body?.fields || req.body || {}), { merge: true });
+      const fields = req.body?.fields || req.body || {};
+      await ref.doc(documentId).set(toFirestore(fields), { merge: true });
       return res.json(toRecord(await ref.doc(documentId).get(), collection));
     }
 
