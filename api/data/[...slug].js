@@ -50,7 +50,7 @@ module.exports = async function handler(req, res) {
       const snap = await firestore.collection('System_Control').doc('Xtractor Website Protection').get();
       if (!snap.exists) return res.status(404).json({ error: 'protection_not_found' });
       const data = snap.data();
-      return res.json({ records: [{ id: snap.id, fields: { Select: data.Website_Status ? 'Unlock' : 'Lock', Text: data.Text || '', Link: data.Link || '', Password: data.Dr_Pass || '' } }] });
+      return res.json({ records: [{ id: snap.id, fields: { Select: data.Website_Status ? 'Unlock' : 'Lock', Text: data.Text || '', Link: data.Link || '' } }] });
     }
 
     if (collection === 'MODE') {
