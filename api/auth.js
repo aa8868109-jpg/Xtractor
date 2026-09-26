@@ -11,11 +11,13 @@ function safeEqual(left, right) {
 
 function setSessionCookie(res, token) {
     const isProduction = process.env.NODE_ENV === 'production';
-    const productionFlags = isProduction ? 'Secure; SameSite=None' : 'SameSite=Lax';
+    const sameSiteFlags = isProduction ? 'SameSite=None; Secure' : 'SameSite=Lax';
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Vary', 'Origin, Cookie');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader(
       'Set-Cookie',
-      `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=3600; HttpOnly; ${productionFlags};` 
+      `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=3600; HttpOnly; ${sameSiteFlags};`
     );
 }
 

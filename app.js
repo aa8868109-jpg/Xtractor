@@ -41,6 +41,7 @@ let currentMode = null; // 'student' or 'doctor'
 let currentStudentCode = null;
 let currentStudentName = null; // To save student name
 let currentStudentRecord = null;
+let currentSessionToken = null; // In-memory fallback for the active page/session. Safe and not persisted to localStorage.
 // Safe storage wrapper: prefers sessionStorage, then localStorage, then in-memory object
 const _inMemoryStorage = {};
 let _localStorageAvailable = false;
@@ -148,9 +149,19 @@ function _defaultMinInterval(url) {
 async function apiGet(url, config = {}) {
     const key = _normalizeUrlKey(url);
 
-    // Cookie-based auth is the only trusted state for production. Do not depend on
-    // browser storage for the session token because Tracking Prevention and private
-    // browsing can block storage access at any time.
+    // Cookie-based auth is the primary state for production, but the active page also
+    // keeps a short-lived in-memory session token as a fallback so same-tab requests
+    // still work when browser storage is blocked or the cookie has not been written yet.
+    if (currentSessionToken && !config.headers?.Authorization && !config.headers?.authorization) {
+        config = {
+            ...config,
+            headers: {
+                ...(config.headers || {}),
+                Authorization: `Bearer ${currentSessionToken}`
+            }
+        };
+    }
+
     if (typeof axios !== 'undefined' && axios && axios.get) {
         config = {
             ...config,
@@ -2546,6 +2557,13 @@ async function submitStudentCode() {
             }
         }
         const token = authResponse?.data?.token || '';
+        if (token) {
+            currentSessionToken = token;
+            if (typeof axios !== 'undefined' && axios && axios.defaults) {
+                axios.defaults.headers.common = axios.defaults.headers.common || {};
+                axios.defaults.headers.common.Authorization = `Bearer ${token}`;
+            }
+        }
         if (authResponse?.data?.authenticated && authResponse.data.role === 'doctor') {
             showDoctorInterface();
             if (signInBtn) signInBtn.disabled = false;
