@@ -9,15 +9,22 @@ function safeEqual(left, right) {
     return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function setSessionCookie(res, token) {
-    const isProduction = process.env.NODE_ENV === 'production';
-    const sameSiteFlags = isProduction ? 'SameSite=None; Secure' : 'SameSite=Lax';
+function getCookieSecurityFlags(req = null) {
+    const proto = (req?.headers?.['x-forwarded-proto'] || req?.headers?.['X-Forwarded-Proto'] || '').toLowerCase();
+    const isHttps = proto.includes('https') || req?.socket?.encrypted || process.env.NODE_ENV === 'production';
+    const secureFlag = isHttps ? '; Secure' : '';
+    const sameSiteFlag = isHttps ? 'SameSite=None' : 'SameSite=Lax';
+    return `${sameSiteFlag}${secureFlag}`;
+}
+
+function setSessionCookie(res, token, req = null) {
+    const securityFlags = getCookieSecurityFlags(req);
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('Vary', 'Origin, Cookie');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader(
       'Set-Cookie',
-      `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=3600; HttpOnly; ${sameSiteFlags};`
+      `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=3600; HttpOnly; ${securityFlags};`
     );
 }
 
@@ -42,7 +49,7 @@ module.exports = async function handler(req, res) {
 
         if (safeEqual(submittedCode, expectedPassword)) {
             const token = createSessionToken({ role: 'doctor', userCode: submittedCode, issuedAt: Date.now() });
-            setSessionCookie(res, token);
+            setSessionCookie(res, token, req);
             logSecurityEvent('doctor_login_success', { req, userCode: submittedCode });
             return res.json({ authenticated: true, role: 'doctor', token });
         }
@@ -70,7 +77,7 @@ module.exports = async function handler(req, res) {
         }
 
         const token = createSessionToken({ role: 'student', userCode: submittedCode, lecture: lectureNumber, issuedAt: Date.now() });
-        setSessionCookie(res, token);
+        setSessionCookie(res, token, req);
         logSecurityEvent('student_login_success', { req, lectureNumber, userCode: submittedCode });
         return res.json({ authenticated: true, role: 'student', token });
     } catch (error) {

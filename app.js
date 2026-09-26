@@ -41,7 +41,29 @@ let currentMode = null; // 'student' or 'doctor'
 let currentStudentCode = null;
 let currentStudentName = null; // To save student name
 let currentStudentRecord = null;
-let currentSessionToken = null; // In-memory fallback for the active page/session. Safe and not persisted to localStorage.
+let currentSessionToken = null; // Active-page token, kept as an explicit fallback for browsers that block cookies.
+const SESSION_TOKEN_KEY = 'xtractor_session_token';
+
+function getCurrentSessionToken() {
+    if (currentSessionToken) return currentSessionToken;
+    try {
+        const stored = safeStorage.getItem(SESSION_TOKEN_KEY);
+        if (stored) {
+            currentSessionToken = stored;
+            return stored;
+        }
+    } catch (e) {}
+    return null;
+}
+
+function persistSessionToken(token) {
+    currentSessionToken = token || null;
+    if (!token) {
+        try { safeStorage.removeItem(SESSION_TOKEN_KEY); } catch (e) {}
+        return;
+    }
+    try { safeStorage.setItem(SESSION_TOKEN_KEY, token); } catch (e) {}
+}
 // Safe storage wrapper: prefers sessionStorage, then localStorage, then in-memory object
 const _inMemoryStorage = {};
 let _localStorageAvailable = false;
@@ -148,16 +170,17 @@ function _defaultMinInterval(url) {
 
 async function apiGet(url, config = {}) {
     const key = _normalizeUrlKey(url);
+    const sessionToken = getCurrentSessionToken();
 
-    // Cookie-based auth is the primary state for production, but the active page also
-    // keeps a short-lived in-memory session token as a fallback so same-tab requests
-    // still work when browser storage is blocked or the cookie has not been written yet.
-    if (currentSessionToken && !config.headers?.Authorization && !config.headers?.authorization) {
+    // Cookie-based auth is the primary state for production, but a short-lived session
+    // token from sessionStorage is also sent as a fallback so mobile browsers and Safari
+    // privacy modes do not silently get 401s on protected reads.
+    if (sessionToken && !config.headers?.Authorization && !config.headers?.authorization) {
         config = {
             ...config,
             headers: {
                 ...(config.headers || {}),
-                Authorization: `Bearer ${currentSessionToken}`
+                Authorization: `Bearer ${sessionToken}`
             }
         };
     }
@@ -2558,7 +2581,7 @@ async function submitStudentCode() {
         }
         const token = authResponse?.data?.token || '';
         if (token) {
-            currentSessionToken = token;
+            persistSessionToken(token);
             if (typeof axios !== 'undefined' && axios && axios.defaults) {
                 axios.defaults.headers.common = axios.defaults.headers.common || {};
                 axios.defaults.headers.common.Authorization = `Bearer ${token}`;
