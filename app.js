@@ -147,16 +147,10 @@ function _defaultMinInterval(url) {
 
 async function apiGet(url, config = {}) {
     const key = _normalizeUrlKey(url);
-    const sessionToken = safeStorage.getItem('xtractor_session_token');
-    if (sessionToken && !config.headers?.Authorization && !config.headers?.authorization) {
-        config = {
-            ...config,
-            headers: {
-                ...(config.headers || {}),
-                Authorization: `Bearer ${sessionToken}`
-            }
-        };
-    }
+
+    // Cookie-based auth is the only trusted state for production. Do not depend on
+    // browser storage for the session token because Tracking Prevention and private
+    // browsing can block storage access at any time.
     if (typeof axios !== 'undefined' && axios && axios.get) {
         config = {
             ...config,
@@ -2552,9 +2546,6 @@ async function submitStudentCode() {
             }
         }
         const token = authResponse?.data?.token || '';
-        if (token) {
-            try { safeStorage.setItem('xtractor_session_token', token); } catch (e) {}
-        }
         if (authResponse?.data?.authenticated && authResponse.data.role === 'doctor') {
             showDoctorInterface();
             if (signInBtn) signInBtn.disabled = false;
