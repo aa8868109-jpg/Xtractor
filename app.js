@@ -157,13 +157,19 @@ async function apiGet(url, config = {}) {
             }
         };
     }
+    if (typeof axios !== 'undefined' && axios && axios.get) {
+        config = {
+            ...config,
+            withCredentials: true
+        };
+    }
 
-    // If currently backing off for this key, throw a 429-like error immediately
+    // If we are backing off for this key, wait briefly and retry instead of failing the
+    // login flow. This avoids self-inflicted lockouts when MODE is polled repeatedly.
     const blockedUntil = _backoffUntil.get(key) || 0;
     if (Date.now() < blockedUntil) {
-        const err = new Error('Client-side backoff - too many requests');
-        err.response = { status: 429, data: { error: 'BACKOFF' } };
-        throw err;
+        const waitForBackoff = Math.min(Math.max(blockedUntil - Date.now() + 250, 250), 5000);
+        await new Promise(resolve => setTimeout(resolve, waitForBackoff));
     }
 
     // Return existing in-flight promise to coalesce duplicate requests
@@ -175,34 +181,57 @@ async function apiGet(url, config = {}) {
     const now = Date.now();
     const waitMs = Math.max(0, minInterval - (now - last));
 
-    const promise = (waitMs > 0 ? new Promise(r => setTimeout(r, waitMs)) : Promise.resolve()).then(() => {
-        return axios.get(url, config).then(resp => {
-            _lastCalledAt.set(key, Date.now());
-            // on success reset any backoff for this key
-            _backoffUntil.delete(key);
-            // clear in-flight
-            _inFlightRequests.delete(key);
-            return resp;
-        }).catch(err => {
-            // mark in-flight cleared
-            _inFlightRequests.delete(key);
-            const status = err?.response?.status;
-            // If unauthorized, set medium backoff and notify
-            if (status === 401) {
-                const next = 30 * 1000; // 30s backoff for auth failures
-                _backoffUntil.set(key, Date.now() + next);
-                try { showAlert('❌ Server rejected the data request. Please try again.', 'error'); } catch(e){}
+    const promise = (waitMs > 0 ? new Promise(r => setTimeout(r, waitMs)) : Promise.resolve()).then(async () => {
+        if (typeof axios !== 'undefined' && axios && axios.get) {
+            try {
+                const resp = await axios.get(url, config);
+                _lastCalledAt.set(key, Date.now());
+                _backoffUntil.delete(key);
+                _inFlightRequests.delete(key);
+                return resp;
+            } catch (err) {
+                _inFlightRequests.delete(key);
+                const status = err?.response?.status;
+                if (status === 401) {
+                    const next = 30 * 1000;
+                    _backoffUntil.set(key, Date.now() + next);
+                    try { showAlert('❌ Server rejected the data request. Please try again.', 'error'); } catch(e){}
+                }
+                if (status === 429) {
+                    const prev = _minIntervalFor.get(key) || _defaultMinInterval(url);
+                    const next = Math.min(Math.max(prev * 2, 2000), 60000);
+                    _minIntervalFor.set(key, next);
+                    _backoffUntil.set(key, Date.now() + next);
+                    try { window._lastData429 = true; } catch(e){}
+                }
+                throw err;
             }
-            if (status === 429) {
-                // exponential backoff per-key
-                const prev = _minIntervalFor.get(key) || _defaultMinInterval(url);
-                const next = Math.min(Math.max(prev * 2, 2000), 60000);
-                _minIntervalFor.set(key, next);
-                _backoffUntil.set(key, Date.now() + next);
-                try { window._lastData429 = true; } catch(e){}
+        }
+
+        const response = await fetch(url, {
+            method: 'GET',
+            credentials: 'include',
+            headers: {
+                ...(config.headers || {}),
+                Accept: 'application/json'
             }
-            throw err;
         });
+
+        const text = await response.text();
+        let payload = null;
+        try { payload = text ? JSON.parse(text) : null; } catch (e) { payload = { raw: text }; }
+
+        _lastCalledAt.set(key, Date.now());
+        _backoffUntil.delete(key);
+        _inFlightRequests.delete(key);
+
+        if (!response.ok) {
+            const err = new Error(`HTTP ${response.status}`);
+            err.response = { status: response.status, data: payload };
+            throw err;
+        }
+
+        return { data: payload };
     });
 
     _inFlightRequests.set(key, promise);
@@ -225,6 +254,16 @@ let scannedQRs = {
 };
 let isProcessingQR = false; // Prevent concurrent processing
 let deviceIP = null; // Device IP address
+
+function ensureAxiosConfigured() {
+    if (typeof axios !== 'undefined' && axios && axios.defaults) {
+        axios.defaults.withCredentials = true;
+        return true;
+    }
+    return false;
+}
+
+ensureAxiosConfigured();
 
 async function getModeRecord(forceRefresh = false) {
     const now = Date.now();
@@ -1180,8 +1219,8 @@ function getStudentName(fields = {}) {
     if (!fields || typeof fields !== 'object') return '';
 
     const candidates = [
-        fields.Name,
         fields.name,
+        fields.Name,
         fields['Student Name'],
         fields['Full Name'],
         fields.StudentName,
@@ -1206,15 +1245,16 @@ function normalizeStudentNameField(fields = {}) {
     const name = getStudentName(fields);
     if (!name) return fields;
 
-    if (!Object.prototype.hasOwnProperty.call(fields, 'Name') && Object.prototype.hasOwnProperty.call(fields, 'name')) {
-        fields.Name = fields.name;
-    }
-    if (!Object.prototype.hasOwnProperty.call(fields, 'name') && Object.prototype.hasOwnProperty.call(fields, 'Name')) {
-        fields.name = fields.Name;
-    }
-    if (!Object.prototype.hasOwnProperty.call(fields, 'Name')) {
-        fields.Name = name;
-    }
+    const normalizedName = String(name).trim();
+    fields.name = normalizedName;
+
+    Object.keys(fields).forEach(key => {
+        const normalizedKey = key.toLowerCase().replace(/[\s_-]+/g, '');
+        if (normalizedKey === 'name' || normalizedKey === 'studentname' || normalizedKey === 'fullname') {
+            if (key !== 'name') delete fields[key];
+        }
+    });
+    delete fields.Name;
     return fields;
 }
 
@@ -1276,7 +1316,7 @@ async function saveStudentLoginData(studentCode, lectureNumber, studentName, stu
                     'Device IP': deviceIP || 'Unknown',
                     'Location': mapsLink,
                     'Region': region,
-                    ...(studentName ? { Name: studentName } : {})
+                    ...(studentName ? { name: studentName } : {})
                 }
             },
             { headers: getDataHeaders() }
@@ -1353,7 +1393,7 @@ async function addStudentToLecture(studentCode, lectureNumber, tableName) {
                 records: [
                     {
                         fields: {
-                            'Name': studentName,
+                            'name': studentName,
                             'Code': studentCode,
                             'Location': `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`,
                             'Region': 'In region',
@@ -2492,11 +2532,25 @@ async function submitStudentCode() {
         }
 
         // Verify doctor credentials on the server; never expose the password to the browser.
-        const authResponse = await axios.post('/api/auth', { code: codeInput }, {
-            headers: getDataHeaders(),
-            validateStatus: status => status < 500,
-            withCredentials: true
-        }).catch(() => null);
+        let authResponse = null;
+        if (typeof axios !== 'undefined' && axios && axios.post) {
+            authResponse = await axios.post('/api/auth', { code: codeInput }, {
+                headers: getDataHeaders(),
+                validateStatus: status => status < 500,
+                withCredentials: true
+            }).catch(() => null);
+        } else {
+            const raw = await fetch('/api/auth', {
+                method: 'POST',
+                credentials: 'include',
+                headers: getDataHeaders(),
+                body: JSON.stringify({ code: codeInput })
+            }).catch(() => null);
+            if (raw) {
+                const text = await raw.text();
+                try { authResponse = { data: JSON.parse(text) }; } catch (e) { authResponse = { data: { authenticated: false } }; }
+            }
+        }
         const token = authResponse?.data?.token || '';
         if (token) {
             try { safeStorage.setItem('xtractor_session_token', token); } catch (e) {}

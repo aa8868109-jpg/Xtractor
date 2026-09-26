@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { getFirestore } = require('./firebase');
 const { SESSION_COOKIE_NAME, createSessionToken } = require('./session');
+const { logSecurityEvent } = require('./security-logger');
 
 function safeEqual(left, right) {
     const leftBuffer = Buffer.from(String(left || ''));
@@ -23,7 +24,8 @@ module.exports = async function handler(req, res) {
 
     try {
         const submittedCode = String(req.body?.code || '').trim();
-        if (!submittedCode || submittedCode.length > 128) {
+        if (!submittedCode || submittedCode.length > 128 || /[\u0000-\u001F\u007F]/.test(submittedCode)) {
+            logSecurityEvent('invalid_auth_input', { req, submittedCodeLength: submittedCode.length });
             return res.status(401).json({ authenticated: false });
         }
 
@@ -37,7 +39,13 @@ module.exports = async function handler(req, res) {
         if (safeEqual(submittedCode, expectedPassword)) {
             const token = createSessionToken({ role: 'doctor', userCode: submittedCode, issuedAt: Date.now() });
             setSessionCookie(res, token);
+            logSecurityEvent('doctor_login_success', { req, userCode: submittedCode });
             return res.json({ authenticated: true, role: 'doctor', token });
+        }
+
+        if (!/^[A-Za-z0-9\-_]+$/.test(submittedCode)) {
+            logSecurityEvent('student_login_invalid_format', { req, submittedCode });
+            return res.status(401).json({ authenticated: false });
         }
 
         const modeSnap = await firestore.collection('MODE').doc('Website Status').get();
@@ -46,19 +54,23 @@ module.exports = async function handler(req, res) {
         const isModeEnabled = modeData.Student_Mode === true || String(modeData.Student_Mode || '').toLowerCase() === 'on';
 
         if (!lectureNumber || !isModeEnabled) {
+            logSecurityEvent('student_login_disabled', { req, lectureNumber, isModeEnabled });
             return res.status(401).json({ authenticated: false });
         }
 
         const lectureRef = firestore.collection(`LEC_${lectureNumber}`);
         const studentSnap = await lectureRef.where('Code', '==', submittedCode).limit(1).get();
         if (studentSnap.empty) {
+            logSecurityEvent('student_login_failed', { req, lectureNumber, submittedCode });
             return res.status(401).json({ authenticated: false });
         }
 
         const token = createSessionToken({ role: 'student', userCode: submittedCode, lecture: lectureNumber, issuedAt: Date.now() });
         setSessionCookie(res, token);
+        logSecurityEvent('student_login_success', { req, lectureNumber, userCode: submittedCode });
         return res.json({ authenticated: true, role: 'student', token });
     } catch (error) {
+        logSecurityEvent('authentication_error', { req, message: error.message || String(error) });
         console.error('Authentication error:', error.message || error);
         return res.status(500).json({ error: 'authentication_failed' });
     }

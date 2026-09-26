@@ -8,7 +8,7 @@ function requireSession(req, res) {
     return null;
   }
 
-  if (session.role !== 'doctor') {
+  if (session.role !== 'doctor' && session.role !== 'student') {
     res.status(403).json({ error: 'forbidden', message: 'Permission denied.' });
     return null;
   }
@@ -27,23 +27,61 @@ function getParts(req) {
   return dataPath.split('/').filter(Boolean).map(decodeURIComponent);
 }
 
+function canonicalizeNameKey(key) {
+  if (!key || typeof key !== 'string') return key;
+  const normalized = key.toLowerCase().replace(/[\s_-]+/g, '');
+  if (normalized === 'name' || normalized === 'studentname' || normalized === 'fullname') {
+    return 'name';
+  }
+  return key;
+}
+
 function toRecord(doc, collection = '') {
   const data = doc.data() || {};
   const fields = {};
   for (const [key, value] of Object.entries(data)) {
+    const canonicalKey = canonicalizeNameKey(key);
     if (key === 'qr_1') fields['1st QR'] = value;
     else if (key === 'qr_2') fields['2nd QR'] = value;
     else if (key === 'qr_3') fields['3rd QR'] = value;
     else if (key === 'Device_ip') fields['Device IP'] = value;
-    else fields[key.replace(/_/g, ' ')] = value;
+    else if (canonicalKey === 'name') {
+      if (!fields.name || !String(fields.name).trim()) fields.name = value;
+    } else {
+      fields[canonicalKey.replace(/_/g, ' ')] = value;
+    }
   }
   if (/^LEC_\d+$/i.test(collection) && !fields.Code) fields.Code = doc.id;
   return { id: doc.id, fields };
 }
 
+function sanitizeFields(fields) {
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
+    return {};
+  }
+
+  const sanitized = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (!key || typeof key !== 'string') continue;
+    if (['__proto__', 'constructor', 'prototype'].includes(key)) continue;
+    if (String(value).length > 25000) continue;
+    const canonicalKey = canonicalizeNameKey(key);
+    if (canonicalKey === 'name') {
+      sanitized.name = String(value).trim();
+      continue;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
+}
+
 function toFirestore(fields) {
   const result = {};
-  for (const [key, value] of Object.entries(fields || {})) {
+  for (const [key, value] of Object.entries(sanitizeFields(fields))) {
+    if (key === 'name') {
+      result.name = String(value).trim();
+      continue;
+    }
     if (key === '1st QR' || key === '1st_QR') result.qr_1 = value;
     else if (key === '2nd QR' || key === '2nd_QR') result.qr_2 = value;
     else if (key === '3rd QR' || key === '3rd_QR') result.qr_3 = value;
@@ -84,16 +122,22 @@ module.exports = async function handler(req, res) {
         return res.json({ records: [{ id: snap.id, fields: { 'Student Mode': data.Student_Mode === true ? 'ON' : 'OFF', Lecture: data.Lecture || null, 'QR Selected': data.QR_Selected || 'NONE', Name: data.Name || 'Website Status' } }] });
       }
 
+      if (method === 'POST' || method === 'PATCH' || method === 'PUT') {
+        if (session.role !== 'doctor') {
+          return res.status(403).json({ error: 'forbidden' });
+        }
+      }
+
       if (session.role !== 'doctor') {
         return res.status(403).json({ error: 'forbidden' });
       }
 
-      const fields = req.body?.fields || req.body || {};
+      const sourceFields = sanitizeFields(req.body?.fields || req.body || {});
       const updates = {};
-      if (fields['Student Mode'] !== undefined) updates.Student_Mode = fields['Student Mode'] === 'ON' || fields['Student Mode'] === true;
-      if (fields.Lecture !== undefined) updates.Lecture = fields.Lecture;
-      if (fields['QR Selected'] !== undefined) updates.QR_Selected = fields['QR Selected'] || 'NONE';
-      if (fields.Name !== undefined) updates.Name = fields.Name;
+      if (sourceFields['Student Mode'] !== undefined) updates.Student_Mode = sourceFields['Student Mode'] === 'ON' || sourceFields['Student Mode'] === true;
+      if (sourceFields.Lecture !== undefined) updates.Lecture = Number(sourceFields.Lecture) || null;
+      if (sourceFields['QR Selected'] !== undefined) updates.QR_Selected = sourceFields['QR Selected'] || 'NONE';
+      if (sourceFields.Name !== undefined) updates.Name = String(sourceFields.Name).slice(0, 200);
       await ref.set(updates, { merge: true });
       const snap = await ref.get();
       const data = snap.data();
@@ -146,7 +190,10 @@ module.exports = async function handler(req, res) {
       }
 
       if (!documentId) return res.status(400).json({ error: 'missing_document_id' });
-      const fields = req.body?.fields || req.body || {};
+      const fields = sanitizeFields(req.body?.fields || req.body || {});
+      if (Object.keys(fields).length === 0) {
+        return res.status(400).json({ error: 'empty_update_payload' });
+      }
       await ref.doc(documentId).set(toFirestore(fields), { merge: true });
       return res.json(toRecord(await ref.doc(documentId).get(), collection));
     }
@@ -155,11 +202,14 @@ module.exports = async function handler(req, res) {
       if (session.role === 'student') {
         return res.status(403).json({ error: 'student_cannot_create_records' });
       }
-      const records = req.body?.records || [req.body || {}];
+      const records = Array.isArray(req.body?.records) ? req.body.records : [req.body || {}];
       const created = [];
       for (const item of records) {
-        const fields = item.fields || item;
-        const id = String(fields.Code || Math.random().toString(36).slice(2, 10));
+        const fields = sanitizeFields(item?.fields || item || {});
+        if (!fields.Code || String(fields.Code).trim().length === 0) {
+          return res.status(400).json({ error: 'missing_student_code_in_record' });
+        }
+        const id = String(fields.Code).trim();
         await ref.doc(id).set(toFirestore(fields), { merge: true });
         created.push(toRecord(await ref.doc(id).get(), collection));
       }

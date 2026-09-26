@@ -1,6 +1,8 @@
 const protectionHandler = require('./protection');
 const dataHandler = require('./data/[...slug]');
 const authHandler = require('./auth');
+const { checkRateLimit } = require('./rate-limit');
+const { logSecurityEvent } = require('./security-logger');
 
 module.exports = async function handler(req, res) {
   try {
@@ -8,14 +10,17 @@ module.exports = async function handler(req, res) {
     const pathname = url.pathname || '/';
 
     if (pathname === '/api/protection' || pathname.startsWith('/api/protection/')) {
+      if (!checkRateLimit(req, res, { endpoint: 'protection', maxRequests: 20, windowMs: 60000 })) return;
       return protectionHandler(req, res);
     }
 
     if (pathname === '/api/auth') {
+      if (!checkRateLimit(req, res, { endpoint: 'auth', maxRequests: 10, windowMs: 60000 })) return;
       return authHandler(req, res);
     }
 
     if (pathname.startsWith('/api/data/')) {
+      if (!checkRateLimit(req, res, { endpoint: 'data', maxRequests: 120, windowMs: 60000 })) return;
       const rest = pathname.replace(/^\/api\/data\/?/, '').split('/').filter(Boolean);
       const req2 = {
         ...req,
