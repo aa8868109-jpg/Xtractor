@@ -1287,20 +1287,12 @@
                     Determining your location…
                 </div>
 
-                <!-- QR Progress -->
-                <div class="section-label">QR Progress</div>
-                <div class="qr-status" id="qr-status">
-                    <div class="qr-check">
-                        <div class="qr-check-title">QR 1</div>
-                        <div class="checkbox-custom" id="qr1-check"><span>✓</span></div>
-                    </div>
-                    <div class="qr-check">
-                        <div class="qr-check-title">QR 2</div>
-                        <div class="checkbox-custom" id="qr2-check"><span>✓</span></div>
-                    </div>
-                    <div class="qr-check">
-                        <div class="qr-check-title">QR 3</div>
-                        <div class="checkbox-custom" id="qr3-check"><span>✓</span></div>
+                <!-- Live QR Status -->
+                <div class="section-label">Live QR Status</div>
+                <div class="qr-status" id="qr-status" style="display:flex; justify-content:center;">
+                    <div class="qr-check" style="flex:1; max-width:220px;">
+                        <div class="qr-check-title">Current QR</div>
+                        <div class="checkbox-custom checked" id="qr1-check"><span>✓</span></div>
                     </div>
                 </div>
 
@@ -1403,18 +1395,6 @@
                             <label class="qr-radio-label">
                                 <input type="radio" name="qr-select" value="LIVE" onchange="selectQRCode('LIVE')">
                                 <span class="qr-radio-text">Live QR</span>
-                            </label>
-                            <label class="qr-radio-label">
-                                <input type="radio" name="qr-select" value="QR_1" onchange="selectQRCode('QR_1')">
-                                <span class="qr-radio-text">QR 1</span>
-                            </label>
-                            <label class="qr-radio-label">
-                                <input type="radio" name="qr-select" value="QR_2" onchange="selectQRCode('QR_2')">
-                                <span class="qr-radio-text">QR 2</span>
-                            </label>
-                            <label class="qr-radio-label">
-                                <input type="radio" name="qr-select" value="QR_3" onchange="selectQRCode('QR_3')">
-                                <span class="qr-radio-text">QR 3</span>
                             </label>
                             <label class="qr-radio-label">
                                 <input type="radio" name="qr-select" value="NONE" onchange="selectQRCode('NONE')">

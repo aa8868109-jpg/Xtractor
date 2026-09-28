@@ -21,11 +21,7 @@ let lockLink = '';
 // Runtime traffic is routed through the Firestore proxy only.
 
 // ====== QR Handling ======
-const QR_CODES = {
-    qr1: '8CmsmS],lZmK$3%ge_=0].1hf]&o>7D)0c)(y^#cpe<9u!8a<oNUqN6"E1(08Dl5',
-    qr2: 't:0+9n"$vf;[/%:xLqn&!sr@c!paHn12}UP02"nKif{a0g@(KXi&sl\\1FUEj.S]1',
-    qr3: '!#W"{SeNLOX05@dOGg=^Cxx1z>)bIA2l|<DG8Tn<]_pOV97`CR1zIeBg(iiPvv`>'
-};
+const LIVE_QR_PREFIX = 'XTRACTOR-';
 const LIVE_QR_INTERVAL_MS = 1500;
 const LIVE_QR_TTL_MS = 1400;
 let liveQrTimer = null;
@@ -1362,7 +1358,7 @@ function resetQRCheckboxes() {
     Object.keys(scannedQRs).forEach(qr => {
         scannedQRs[qr] = false;
         const checkbox = document.getElementById(`${qr}-check`);
-        checkbox.classList.remove('checked');
+        if (checkbox) checkbox.classList.remove('checked');
     });
 }
 
@@ -1796,8 +1792,8 @@ async function loadStudentScannedQRs(studentCode, lectureNumber, tableName, exis
         const isRecorded = value => value === true || value === 'true' || value === 1 || value === '1';
 
         scannedQRs.qr1 = isRecorded(fields['1st QR'] ?? fields['1st_QR'] ?? fields.qr_1);
-        scannedQRs.qr2 = isRecorded(fields['2nd QR'] ?? fields['2nd_QR'] ?? fields.qr_2);
-        scannedQRs.qr3 = isRecorded(fields['3rd QR'] ?? fields['3rd_QR'] ?? fields.qr_3);
+        scannedQRs.qr2 = false;
+        scannedQRs.qr3 = false;
 
         console.log('✓ تم قراءة الأكواس المحفوظة:', scannedQRs);
         updateQRCheckmarks();
@@ -2023,114 +2019,72 @@ async function onQRScanned(decodedText) {
         statusEl.className = 'scanner-status processing';
     }
 
-    // التحقق من القيمة المكتشفة
-    let matchedQR = null;
-    let qrValue = null; // QR_1, QR_2, QR_3
-    
-    if (decodedText === QR_CODES.qr1) {
-        matchedQR = 'qr1';
-        qrValue = 'QR_1';
-    } else if (decodedText === QR_CODES.qr2) {
-        matchedQR = 'qr2';
-        qrValue = 'QR_2';
-    } else if (decodedText === QR_CODES.qr3) {
-        matchedQR = 'qr3';
-        qrValue = 'QR_3';
+    const selectedQR = await getSelectedQRFromMode();
+    if (selectedQR === 'NONE') {
+        if (statusEl) {
+            statusEl.textContent = '❌ No live QR is active - Ask instructor to enable QR';
+            statusEl.className = 'scanner-status';
+            setTimeout(() => {
+                if (statusEl) {
+                    statusEl.textContent = '✓ Camera active - Point at QR code';
+                }
+            }, 2500);
+        }
+        showAlert('❌ No live QR is active. Ask the instructor to enable it.', 'error');
+        return;
     }
 
-    if (matchedQR && !scannedQRs[matchedQR]) {
-        const selectedQR = await getSelectedQRFromMode();
-        if (selectedQR === 'NONE') {
-            if (statusEl) {
-                statusEl.textContent = `❌ No QR codes are active - Ask instructor to enable QR`;
-                statusEl.className = 'scanner-status';
-                setTimeout(() => {
-                    if (statusEl) {
-                        statusEl.textContent = '✓ Camera active - Point at QR code';
-                    }
-                }, 2500);
-            }
-            showAlert(`❌ No QR codes are active. Ask the instructor to enable a QR code.`, 'error');
-            return;
-        }
+    const normalizedScanned = String(decodedText).trim();
+    const normalizedSelected = String(selectedQR).trim();
 
-        const normalizedScanned = String(decodedText).trim();
-        const normalizedSelected = String(selectedQR).trim();
-
-        if (isLiveQrValue(normalizedSelected)) {
-            if (normalizedSelected !== normalizedScanned) {
+    if (!isLiveQrValue(normalizedSelected)) {
+        if (statusEl) {
+            statusEl.textContent = '❌ Only the live QR is accepted.';
+            statusEl.className = 'scanner-status';
+            setTimeout(() => {
                 if (statusEl) {
-                    statusEl.textContent = `❌ Wrong QR! Only the current live QR is accepted.`;
-                    statusEl.className = 'scanner-status';
-                    setTimeout(() => {
-                        if (statusEl) {
-                            statusEl.textContent = '✓ Camera active - Point at QR code';
-                        }
-                    }, 2500);
+                    statusEl.textContent = '✓ Camera active - Point at QR code';
                 }
-                showAlert('❌ You scanned an old or incorrect QR code. Please scan the current active QR only.', 'error');
-                return;
-            }
-        } else if (matchedQR !== 'qr1' && matchedQR !== 'qr2' && matchedQR !== 'qr3') {
-            // Legacy static QRs from the original fixed set
-            const staticMap = {
-                qr1: 'QR_1',
-                qr2: 'QR_2',
-                qr3: 'QR_3'
-            };
-            if (staticMap[matchedQR] !== normalizedSelected) {
-                if (statusEl) {
-                    statusEl.textContent = `❌ Wrong QR! Only ${normalizedSelected} is active.`;
-                    statusEl.className = 'scanner-status';
-                    setTimeout(() => {
-                        if (statusEl) {
-                            statusEl.textContent = '✓ Camera active - Point at QR code';
-                        }
-                    }, 2500);
-                }
-                showAlert(`❌ You scanned ${staticMap[matchedQR] || 'an incorrect QR'}, but only ${normalizedSelected} is active.`, 'error');
-                return;
-            }
+            }, 2500);
         }
-        
-        // تعيين flag المعالجة
+        showAlert('❌ The instructor has not enabled the live QR. Please wait for the current code.', 'error');
+        return;
+    }
+
+    if (normalizedSelected !== normalizedScanned) {
+        if (statusEl) {
+            statusEl.textContent = '❌ Wrong QR! Only the current live QR is accepted.';
+            statusEl.className = 'scanner-status';
+            setTimeout(() => {
+                if (statusEl) {
+                    statusEl.textContent = '✓ Camera active - Point at QR code';
+                }
+            }, 2500);
+        }
+        showAlert('❌ You scanned an old or incorrect QR code. Please scan the current active QR only.', 'error');
+        return;
+    }
+
+    if (!scannedQRs.qr1) {
         isProcessingQR = true;
-        
-        // تحديث Firestore أولاً قبل تضييء العلامة
+
         if (currentMode === 'student' && currentLectureNumber && currentStudentCode) {
-            const tableName = `LEC_${currentLectureNumber}`; // استخدام LEC_1 أو LEC_2 إلخ
-            
-            // تحديد اسم العمود الصحيح
-            let columnName;
-            if (matchedQR === 'qr1') {
-                columnName = '1st QR';
-            } else if (matchedQR === 'qr2') {
-                columnName = '2nd QR';
-            } else if (matchedQR === 'qr3') {
-                columnName = '3rd QR';
-            }
-            
-            // انتظر نتيجة التحديث في Firestore
+            const tableName = `LEC_${currentLectureNumber}`;
             const updateResult = await updateStudentAttendance(
                 currentStudentCode,
                 currentLectureNumber,
                 tableName,
-                columnName,
+                '1st QR',
                 currentStudentRecord
             );
-            
-            // فقط إذا كان التحديث ناجحاً، قم بإضاءة العلامة
+
             if (updateResult) {
-                // تحديث الحالة المحلية
-                scannedQRs[matchedQR] = true;
-                
-                // تحديث الواجهة
-                const checkbox = document.getElementById(`${matchedQR}-check`);
-                checkbox.classList.add('checked');
-                
-                // Update status with success
+                scannedQRs.qr1 = true;
+                const checkbox = document.getElementById('qr1-check');
+                if (checkbox) checkbox.classList.add('checked');
+
                 if (statusEl) {
-                    statusEl.textContent = `✓ ${matchedQR.toUpperCase()} Recorded Successfully!`;
+                    statusEl.textContent = '✓ Live QR Recorded Successfully!';
                     statusEl.className = 'scanner-status scanning';
                     setTimeout(() => {
                         if (statusEl) {
@@ -2138,12 +2092,11 @@ async function onQRScanned(decodedText) {
                         }
                     }, 2000);
                 }
-                
-                showAlert(`✓ ${matchedQR} recorded`, 'success');
+
+                showAlert('✓ Live QR recorded', 'success');
             } else {
-                // إذا فشل التحديث، اعرض رسالة خطأ ولا تضء العلامة
                 if (statusEl) {
-                    statusEl.textContent = `❌ ${matchedQR.toUpperCase()} Failed to Record!`;
+                    statusEl.textContent = '❌ Live QR failed to record!';
                     statusEl.className = 'scanner-status';
                     setTimeout(() => {
                         if (statusEl) {
@@ -2151,13 +2104,12 @@ async function onQRScanned(decodedText) {
                         }
                     }, 2000);
                 }
-                showAlert(`❌ Failed to record ${matchedQR}. Please try again.`, 'error');
+                showAlert('❌ Failed to record the live QR. Please try again.', 'error');
             }
         }
-        
-        // Reset processing flag
+
         isProcessingQR = false;
-    } else if (!matchedQR) {
+    } else {
         if (statusEl) {
             statusEl.textContent = '❌ Invalid QR code';
             statusEl.className = 'scanner-status';
@@ -2338,10 +2290,8 @@ async function updateStudentsList() {
     // Filter students - show only those with at least one QR code true
     const attendedStudents = students.filter(record => {
         const student = record.fields || {};
-        const has1stQR = isRecorded(student['1st QR'] ?? student['1st_QR'] ?? student.qr_1);
-        const has2ndQR = isRecorded(student['2nd QR'] ?? student['2nd_QR'] ?? student.qr_2);
-        const has3rdQR = isRecorded(student['3rd QR'] ?? student['3rd_QR'] ?? student.qr_3);
-        return has1stQR || has2ndQR || has3rdQR;
+        const hasLiveQR = isRecorded(student['1st QR'] ?? student['1st_QR'] ?? student.qr_1);
+        return hasLiveQR;
     });
 
     await Promise.all(attendedStudents.map(async record => {
@@ -2371,15 +2321,10 @@ async function updateStudentsList() {
 
         // Count scanned QR codes
         const qr1Scanned = student['1st QR'] === true || student['1st QR'] === 'true';
-        const qr2Scanned = student['2nd QR'] === true || student['2nd QR'] === 'true';
-        const qr3Scanned = student['3rd QR'] === true || student['3rd QR'] === 'true';
-        const qrCount = [qr1Scanned, qr2Scanned, qr3Scanned].filter(Boolean).length;
-        const qrStatus = `(${qrCount}/3 QR)`;
+        const qrStatus = '(1/1 Live QR)';
         const qrIndicators = `
             <span class="student-qr-indicators" aria-label="Scanned QR codes">
-                <span class="student-qr-dot ${qr1Scanned ? 'scanned' : ''}" title="QR 1">1</span>
-                <span class="student-qr-dot ${qr2Scanned ? 'scanned' : ''}" title="QR 2">2</span>
-                <span class="student-qr-dot ${qr3Scanned ? 'scanned' : ''}" title="QR 3">3</span>
+                <span class="student-qr-dot ${qr1Scanned ? 'scanned' : ''}" title="Live QR">L</span>
             </span>`;
 
         // Check if student is out of region
