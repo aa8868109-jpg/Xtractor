@@ -890,8 +890,9 @@ async function checkDeviceIPConflict(studentCode, lectureNumber, existingStudent
     console.log(`🔍 فحص تضارب IP: Code=${studentCode}, IP=${currentIP}, Lecture=${lectureNumber}`);
 
     if (!currentIP || currentIP === 'Unknown') {
-        console.warn('⚠️ Device IP unavailable on this device; skipping strict IP conflict check to avoid blocking valid login.');
-        return true;
+        console.warn('⚠️ Device IP unavailable on this device; blocking student access to prevent duplicate-account use on the same device.');
+        showAlert('❌ لا يمكن فتح صفحة الطالب لأن عنوان IP للجهاز غير متوفر أو غير صحيح. حاول من جهاز آخر أو تأكد من اتصال الشبكة.', 'error');
+        return false;
     }
 
     try {

@@ -211,14 +211,14 @@ module.exports = async function handler(req, res) {
           }
 
           const myDeviceIP = String(myRecord.data()?.Device_ip || myRecord.data()?.['Device IP'] || '').trim();
-          if (!myDeviceIP) {
-            return res.status(403).json({ error: 'student_device_not_registered' });
+          if (!myDeviceIP || myDeviceIP === 'Unknown') {
+            return res.status(403).json({ error: 'student_device_ip_missing' });
           }
-          if (myDeviceIP !== requestedIP) {
-            return res.status(403).json({ error: 'student_device_mismatch' });
+          if (myDeviceIP === requestedIP) {
+            return res.json({ records: [toRecord(myRecord, collection)] });
           }
 
-          return res.json({ records: [toRecord(myRecord, collection)] });
+          return res.status(403).json({ error: 'student_device_mismatch' });
         }
 
         const snaps = await ref.where('Device_ip', '==', requestedIP).get();
