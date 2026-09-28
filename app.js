@@ -22,9 +22,10 @@ let lockLink = '';
 
 // ====== QR Handling ======
 const LIVE_QR_PREFIX = 'XTRACTOR-';
-const LIVE_QR_INTERVAL_MS = 3000;
-const LIVE_QR_TTL_MS = 3000;
+const LIVE_QR_INTERVAL_MS = 5000;
+const LIVE_QR_TTL_MS = 5000;
 let liveQrTimer = null;
+let liveQrViewerTimer = null;
 let currentLiveQrValue = null;
 let currentLiveQrExpiresAt = 0;
 
@@ -885,7 +886,7 @@ async function syncLiveQrToMode() {
     }
 }
 
-function startLiveQrGenerator() {
+function startLiveQrGenerator(showNotification = true) {
     if (!currentLectureNumber) {
         showAlert('⚠️ Please select a lecture number first.', 'warning');
         return;
@@ -897,7 +898,9 @@ function startLiveQrGenerator() {
 
     syncLiveQrToMode();
     liveQrTimer = setInterval(syncLiveQrToMode, LIVE_QR_INTERVAL_MS);
-    showAlert('✓ Live QR generator started. Students can scan only the current code.', 'success');
+    if (showNotification) {
+        showAlert('✓ Live QR generator started. Students can scan only the current code.', 'success');
+    }
 }
 
 function stopLiveQrGenerator() {
@@ -936,21 +939,36 @@ async function openLiveQrPage() {
         return;
     }
 
-    const popup = window.open(`${window.location.origin}${window.location.pathname}?view=qr`, '_blank', 'width=440,height=620');
-    if (popup) {
-        popup.focus();
-        if (!currentLiveQrValue) {
-            currentLiveQrValue = generateLiveQrValue();
-        }
-        renderLiveQrImage(currentLiveQrValue);
-    } else {
-        showAlert('⚠️ Popup blocked. Please allow popups and try again.', 'warning');
+    ['login-section', 'student-section', 'doctor-panel', 'top-bar'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.style.display = 'none';
+    });
+    const viewer = document.getElementById('live-qr-page');
+    if (viewer) viewer.style.display = 'block';
+
+    startLiveQrGenerator(false);
+    await refreshLiveQrViewer();
+    if (liveQrViewerTimer) clearInterval(liveQrViewerTimer);
+    liveQrViewerTimer = setInterval(refreshLiveQrViewer, 1500);
+}
+
+function closeLiveQrPage() {
+    if (liveQrViewerTimer) {
+        clearInterval(liveQrViewerTimer);
+        liveQrViewerTimer = null;
     }
+
+    const viewer = document.getElementById('live-qr-page');
+    if (viewer) viewer.style.display = 'none';
+    const topBar = document.getElementById('top-bar');
+    const doctorPanel = document.getElementById('doctor-panel');
+    if (topBar) topBar.style.display = 'block';
+    if (doctorPanel) doctorPanel.style.display = 'block';
 }
 
 async function refreshLiveQrViewer() {
-    const viewMode = new URLSearchParams(window.location.search).get('view');
-    if (viewMode !== 'qr') return;
+    const viewer = document.getElementById('live-qr-page');
+    if (!viewer || viewer.style.display === 'none') return;
 
     try {
         const record = await getModeRecord(true);
@@ -2912,22 +2930,6 @@ function startContinuousLocationTracking() {
  * Initialize application on page load
  */
 document.addEventListener('DOMContentLoaded', async function() {
-    const viewMode = new URLSearchParams(window.location.search).get('view');
-    if (viewMode === 'qr') {
-        const viewContainer = document.getElementById('live-qr-page');
-        if (viewContainer) {
-            viewContainer.style.display = 'block';
-            const sections = ['login-section','student-section','doctor-panel','top-bar'];
-            sections.forEach(id => {
-                const el = document.getElementById(id);
-                if (el) el.style.display = 'none';
-            });
-        }
-        refreshLiveQrViewer();
-        setInterval(refreshLiveQrViewer, 1500);
-        return;
-    }
-
     // Comprehensive cleanup of old storage data (safe)
     safeStorage.removeItem('deviceIdentifier');
     safeStorage.removeItem('device-id');
