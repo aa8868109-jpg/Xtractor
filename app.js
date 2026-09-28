@@ -909,29 +909,14 @@ async function checkDeviceIPConflict(studentCode, lectureNumber, existingStudent
         // ✅ الفحص الأول: البحث في جدول المحاضرة عن IP (هل مسجل برمز مختلف؟)
         console.log(`🔍 الفحص الأول - فحص جدول ${tableName} عن IP: ${currentIP}`);
         const lectureResponseByIP = await apiGet(
-            `/api/data/${encodeURIComponent(tableName)}?filterByFormula=({Device IP}='${currentIP}')`,
+            `/api/data/${encodeURIComponent(tableName)}?filterByFormula=({Device%20IP}='${currentIP}')&checkConflict=1`,
             { headers: getDataHeaders() }
         );
 
-        const ipRecords = Array.isArray(lectureResponseByIP?.data?.records)
-            ? lectureResponseByIP.data.records
-            : [];
-        console.log('فحص IP في جدول المحاضرة:', ipRecords.length, 'records');
-        const matchingIPRecord = ipRecords.find(record => {
-            const registeredIP = String(record.fields?.['Device IP'] || '').trim();
-            return registeredIP === String(currentIP).trim();
-        });
-        if (matchingIPRecord) {
-            const lectureRecord = matchingIPRecord;
-            const registeredCode = getStudentCodeFromRecord(lectureRecord);
-            console.log(`✓ وجد في ${tableName}: Code=${registeredCode || lectureRecord.id || 'UNKNOWN'}, IP=${currentIP}`);
-            
-            if (registeredCode !== String(studentCode)) { // ✅ مقارنة String مع String
-                console.warn(`❌ رفض الفحص الأول: IP مسجل برمز مختلف (${registeredCode} ≠ ${studentCode})`);
-                showAlert(`❌ هذا الجهاز مرتبط برمز جامعي مختلف (${registeredCode}) - لا يمكن الدخول`, 'error');
-                return false; // ❌ IP موجود في المحاضرة برمز مختلف
-            }
-            console.log(`✓ الفحص الأول نجح: نفس الكود (${studentCode})`);
+        if (lectureResponseByIP?.data?.conflict === true) {
+            console.warn('❌ رفض الفحص الأول: هذا الـ IP مرتبط برمز جامعي مختلف.');
+            showAlert('❌ هذا الجهاز مرتبط برمز جامعي مختلف - لا يمكن الدخول', 'error');
+            return false;
         } else {
             console.log(`✓ الفحص الأول نجح: IP جديد لم يُسجل من قبل`);
         }

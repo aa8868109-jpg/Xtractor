@@ -1,5 +1,6 @@
 const { getFirestore } = require('../firebase');
 const { validateSessionToken } = require('../session');
+const { isIP } = require('net');
 
 function requireSession(req, res) {
   const session = validateSessionToken(req);
@@ -224,6 +225,27 @@ module.exports = async function handler(req, res) {
           const myRecord = await findStudentRecordByIdentity(ref, session.userCode);
           if (!myRecord) {
             return res.status(403).json({ error: 'student_insufficient_scope' });
+          }
+
+          if (params.get('checkConflict') === '1') {
+            if (!isIP(requestedIP)) {
+              return res.status(400).json({ error: 'invalid_device_ip' });
+            }
+
+            const [deviceIpMatches, legacyIpMatches] = await Promise.all([
+              ref.where('Device_ip', '==', requestedIP).limit(20).get(),
+              ref.where('Device IP', '==', requestedIP).limit(20).get()
+            ]);
+            const matchingDocs = new Map();
+            for (const doc of [...deviceIpMatches.docs, ...legacyIpMatches.docs]) {
+              matchingDocs.set(doc.id, doc);
+            }
+            const conflict = Array.from(matchingDocs.values()).some(doc => {
+              const otherCode = getStudentCodeFromRecordData(doc.data() || {}, doc.id);
+              return otherCode && otherCode !== String(session.userCode || '').trim();
+            });
+
+            return res.json({ conflict });
           }
 
           const myDeviceIP = String(myRecord.data()?.Device_ip || myRecord.data()?.['Device IP'] || '').trim();
