@@ -806,84 +806,76 @@ async function getDeviceIP() {
         let ipFound = false;
         let timeoutId;
 
-        const pc = new RTCPeerConnection({
-            iceServers: []
-        });
-
-        // مهم: إنشاء data channel لبدء عملية ICE
-        pc.createDataChannel('');
-
-        // إنشاء offer لبدء جمع ICE candidates
-        pc.createOffer()
-            .then(offer => pc.setLocalDescription(offer))
-            .catch(e => {
-                console.error('❌ خطأ في WebRTC:', e);
-                clearTimeout(timeoutId);
-                pc.close();
-                resolve(null); // فشل - IP غير متاح
+        try {
+            const pc = new RTCPeerConnection({
+                iceServers: []
             });
 
-        // معالج ICE candidates
-        pc.onicecandidate = (ice) => {
-            if (ipFound) return;
-
-            if (!ice || !ice.candidate) {
-                // انتهى جمع candidates ولم نجد IP
-                if (!ipFound) {
-                    console.warn('⚠️ فشل جلب Local IP - الجهاز غير مدعوم أو الشبكة غير متوفرة');
+            pc.createDataChannel('');
+            pc.createOffer()
+                .then(offer => pc.setLocalDescription(offer))
+                .catch(e => {
+                    console.warn('⚠️ WebRTC unavailable on this browser; falling back to Unknown device IP:', e?.message || e);
                     clearTimeout(timeoutId);
                     pc.close();
-                    resolve(null); // فشل - IP غير متاح
-                }
-                return;
-            }
+                    deviceIP = 'Unknown';
+                    resolve(deviceIP);
+                });
 
-            try {
-                const candidate = ice.candidate.candidate;
-                
-                // استخراج IP من candidate
-                const ipMatch = candidate.match(/([0-9]{1,3}(\.[0-9]{1,3}){3})/);
-                
-                if (ipMatch && ipMatch[1]) {
-                    const ip = ipMatch[1];
-                    
-                    // فلترة: نقبل فقط IPs الداخلية (Private IPs)
-                    if (isPrivateIP(ip)) {
-                        console.log('✓ تم العثور على Local IP الحقيقي:', ip);
-                        deviceIP = ip;
-                        ipFound = true;
+            pc.onicecandidate = (ice) => {
+                if (ipFound) return;
+
+                if (!ice || !ice.candidate) {
+                    if (!ipFound) {
+                        console.warn('⚠️ فشل جلب Local IP - الجهاز غير مدعوم أو الشبكة غير متوفرة');
                         clearTimeout(timeoutId);
                         pc.close();
+                        deviceIP = 'Unknown';
                         resolve(deviceIP);
                     }
+                    return;
                 }
-            } catch (e) {
-                console.error('❌ خطأ في معالجة ICE candidate:', e);
-            }
-        };
 
-        // timeout: 2 seconds for IP detection (reduced from 5s)
-        timeoutId = setTimeout(() => {
-            if (!ipFound) {
-                console.warn('⚠️ IP detection timeout - not available');
-                pc.close();
-                resolve(null); // فشل - timeout
-            }
-        }, 2000);
+                try {
+                    const candidate = ice.candidate.candidate;
+                    const ipMatch = candidate.match(/([0-9]{1,3}(\.[0-9]{1,3}){3})/);
 
-        function isPrivateIP(ip) {
-            const parts = ip.split('.').map(Number);
-            
-            // 10.0.0.0 - 10.255.255.255
-            if (parts[0] === 10) return true;
-            
-            // 172.16.0.0 - 172.31.255.255
-            if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
-            
-            // 192.168.0.0 - 192.168.255.255
-            if (parts[0] === 192 && parts[1] === 168) return true;
-            
-            return false;
+                    if (ipMatch && ipMatch[1]) {
+                        const ip = ipMatch[1];
+                        if (isPrivateIP(ip)) {
+                            console.log('✓ تم العثور على Local IP الحقيقي:', ip);
+                            deviceIP = ip;
+                            ipFound = true;
+                            clearTimeout(timeoutId);
+                            pc.close();
+                            resolve(deviceIP);
+                        }
+                    }
+                } catch (e) {
+                    console.warn('⚠️ خطأ في معالجة ICE candidate:', e?.message || e);
+                }
+            };
+
+            timeoutId = setTimeout(() => {
+                if (!ipFound) {
+                    console.warn('⚠️ IP detection timeout - not available');
+                    pc.close();
+                    deviceIP = 'Unknown';
+                    resolve(deviceIP);
+                }
+            }, 2000);
+
+            function isPrivateIP(ip) {
+                const parts = ip.split('.').map(Number);
+                if (parts[0] === 10) return true;
+                if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+                if (parts[0] === 192 && parts[1] === 168) return true;
+                return false;
+            }
+        } catch (error) {
+            console.warn('⚠️ RTCPeerConnection unavailable on this device; using Unknown IP fallback.', error?.message || error);
+            deviceIP = 'Unknown';
+            resolve(deviceIP);
         }
     });
 }
@@ -896,11 +888,10 @@ async function getDeviceIP() {
 async function checkDeviceIPConflict(studentCode, lectureNumber, existingStudentRecord = null) {
     const currentIP = await getDeviceIP();
     console.log(`🔍 فحص تضارب IP: Code=${studentCode}, IP=${currentIP}, Lecture=${lectureNumber}`);
-    
-    if (!currentIP) {
-        console.error('❌ لم تتمكن من الحصول على IP');
-        showAlert('❌ جهازك غير مدعوم أو الشبكة غير متوفرة - لا يمكن تحديد Local IP', 'error');
-        return false;
+
+    if (!currentIP || currentIP === 'Unknown') {
+        console.warn('⚠️ Device IP unavailable on this device; skipping strict IP conflict check to avoid blocking valid login.');
+        return true;
     }
 
     try {
