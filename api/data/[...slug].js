@@ -120,7 +120,7 @@ module.exports = async function handler(req, res) {
     const parts = getParts(req);
     if (parts.length < 1) return res.status(400).json({ error: 'invalid_data_path' });
     const collection = parts[0];
-    const documentId = parts[1] || req.body?.id || req.body?.recordId || null;
+    const documentId = parts[1] || req.query?.documentId || req.body?.documentId || req.body?.id || req.body?.recordId || null;
     const method = (req.method || 'GET').toUpperCase();
 
     if (collection === 'Protection') {

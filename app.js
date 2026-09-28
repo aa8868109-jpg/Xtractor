@@ -1251,7 +1251,7 @@ async function findStudent(studentCode, lectureNumber = null) {
         const tableName = lectureNumber ? `LEC_${lectureNumber}` : STUDENTS_TABLE;
 
         const directResponse = await apiGet(
-            `/api/data/${encodeURIComponent(tableName)}/${encodeURIComponent(studentCode)}`,
+            `/api/data/${encodeURIComponent(tableName)}?documentId=${encodeURIComponent(studentCode)}`,
             { headers: getDataHeaders() }
         );
         const directStudent = directResponse?.data?.records?.[0];
