@@ -25,7 +25,8 @@ const LIVE_QR_PREFIX = 'XTRACTOR-';
 const LIVE_QR_INTERVAL_MS = 5000;
 const LIVE_QR_TTL_MS = 5000;
 let liveQrTimer = null;
-let liveQrViewerTimer = null;
+let liveQrGeneratorActive = false;
+let liveQrSyncPromise = null;
 let currentLiveQrValue = null;
 let currentLiveQrExpiresAt = 0;
 
@@ -706,8 +707,7 @@ async function selectQRCode(qrValue) {
     }
 
     if (qrValue === 'LIVE') {
-        stopLiveQrGenerator();
-        startLiveQrGenerator();
+        showAlert('Open the QR page to start live QR rotation.', 'info');
         return;
     }
     
@@ -854,60 +854,70 @@ function renderLiveQrImage(qrValue) {
     }
 }
 
-async function syncLiveQrToMode() {
-    if (!currentLectureNumber) {
-        return;
-    }
+function syncLiveQrToMode() {
+    if (!liveQrGeneratorActive || !currentLectureNumber) return Promise.resolve();
 
     const qrValue = generateLiveQrValue();
     currentLiveQrValue = qrValue;
-    try {
-        await axios.patch(
-            `/api/data/${encodeURIComponent(MODE_TABLE)}`,
-            {
-                fields: {
-                    'Lecture': String(currentLectureNumber),
-                    'QR Selected': qrValue,
-                    'Student Mode': 'ON'
-                }
-            },
-            { headers: getDataHeaders() }
-        );
+    const syncPromise = axios.patch(
+        `/api/data/${encodeURIComponent(MODE_TABLE)}`,
+        {
+            fields: {
+                'Lecture': String(currentLectureNumber),
+                'QR Selected': qrValue,
+                'Student Mode': 'ON'
+            }
+        },
+        { headers: getDataHeaders() }
+    ).then(() => {
         invalidateModeRecordCache();
+        if (!liveQrGeneratorActive) return;
         renderLiveQrImage(qrValue);
         const statusDiv = document.getElementById('mode-status');
         if (statusDiv) {
             statusDiv.textContent = '✓ Status: Live QR Active';
             statusDiv.style.color = '#2e7d32';
         }
-    } catch (error) {
+    }).catch(error => {
         console.error('❌ Failed to sync live QR to MODE:', error);
-        showAlert('❌ Failed to sync live QR to the attendance control.', 'error');
+        showAlert('❌ Failed to sync the live QR to attendance control.', 'error');
+    }).finally(() => {
+        if (liveQrSyncPromise === syncPromise) liveQrSyncPromise = null;
+    });
+
+    liveQrSyncPromise = syncPromise;
+    return syncPromise;
+}
+
+async function runLiveQrCycle() {
+    if (!liveQrGeneratorActive) return;
+    const cycleStartedAt = Date.now();
+    await syncLiveQrToMode();
+    if (liveQrGeneratorActive) {
+        const delay = Math.max(0, LIVE_QR_INTERVAL_MS - (Date.now() - cycleStartedAt));
+        liveQrTimer = setTimeout(runLiveQrCycle, delay);
     }
 }
 
-function startLiveQrGenerator(showNotification = true) {
+function startLiveQrGenerator() {
     if (!currentLectureNumber) {
         showAlert('⚠️ Please select a lecture number first.', 'warning');
         return;
     }
 
-    if (liveQrTimer) {
-        clearInterval(liveQrTimer);
-    }
+    const viewer = document.getElementById('live-qr-page');
+    if (!viewer || viewer.style.display === 'none' || liveQrGeneratorActive) return;
 
-    syncLiveQrToMode();
-    liveQrTimer = setInterval(syncLiveQrToMode, LIVE_QR_INTERVAL_MS);
-    if (showNotification) {
-        showAlert('✓ Live QR generator started. Students can scan only the current code.', 'success');
-    }
+    liveQrGeneratorActive = true;
+    runLiveQrCycle();
 }
 
 function stopLiveQrGenerator() {
     if (liveQrTimer) {
-        clearInterval(liveQrTimer);
+        clearTimeout(liveQrTimer);
         liveQrTimer = null;
     }
+    liveQrGeneratorActive = false;
     currentLiveQrValue = null;
     currentLiveQrExpiresAt = 0;
 }
@@ -924,9 +934,7 @@ async function toggleStudentMode(isEnabled) {
         return;
     }
 
-    if (isEnabled) {
-        startLiveQrGenerator();
-    } else {
+    if (!isEnabled) {
         stopLiveQrGenerator();
         await updateSelectedQR(currentLectureNumber, 'NONE');
         showAlert('✓ Student Mode stopped. QR access is disabled.', 'success');
@@ -946,46 +954,41 @@ async function openLiveQrPage() {
     const viewer = document.getElementById('live-qr-page');
     if (viewer) viewer.style.display = 'block';
 
-    startLiveQrGenerator(false);
-    await refreshLiveQrViewer();
-    if (liveQrViewerTimer) clearInterval(liveQrViewerTimer);
-    liveQrViewerTimer = setInterval(refreshLiveQrViewer, 1500);
+    startLiveQrGenerator();
 }
 
-function closeLiveQrPage() {
-    if (liveQrViewerTimer) {
-        clearInterval(liveQrViewerTimer);
-        liveQrViewerTimer = null;
-    }
-
+async function closeLiveQrPage() {
     const viewer = document.getElementById('live-qr-page');
     if (viewer) viewer.style.display = 'none';
+    stopLiveQrGenerator();
+
+    if (liveQrSyncPromise) {
+        await liveQrSyncPromise;
+    }
+
+    if (!liveQrGeneratorActive && currentLectureNumber) {
+        try {
+            await axios.patch(
+                `/api/data/${encodeURIComponent(MODE_TABLE)}`,
+                { fields: { 'QR Selected': 'NONE' } },
+                { headers: getDataHeaders() }
+            );
+            invalidateModeRecordCache();
+        } catch (error) {
+            console.error('❌ Failed to deactivate the live QR:', error);
+            showAlert('❌ Could not deactivate the QR. Please check the connection.', 'error');
+        }
+    }
+
+    const viewerImage = document.getElementById('live-qr-display-image');
+    if (viewerImage) viewerImage.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+    const status = document.getElementById('live-qr-status');
+    if (status) status.textContent = 'No active QR is currently enabled.';
+
     const topBar = document.getElementById('top-bar');
     const doctorPanel = document.getElementById('doctor-panel');
     if (topBar) topBar.style.display = 'block';
     if (doctorPanel) doctorPanel.style.display = 'block';
-}
-
-async function refreshLiveQrViewer() {
-    const viewer = document.getElementById('live-qr-page');
-    if (!viewer || viewer.style.display === 'none') return;
-
-    try {
-        const record = await getModeRecord(true);
-        const activeQr = record?.fields?.['QR Selected'];
-        const statusEl = document.getElementById('live-qr-status');
-        if (!activeQr || activeQr === 'NONE') {
-            if (statusEl) statusEl.textContent = 'No active QR is currently enabled.';
-            const viewerImage = document.getElementById('live-qr-display-image');
-            if (viewerImage) viewerImage.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
-            return;
-        }
-
-        if (statusEl) statusEl.textContent = isLiveQrValue(activeQr) ? 'Live QR is active — students can scan only this code.' : `Active QR: ${activeQr}`;
-        renderLiveQrImage(activeQr);
-    } catch (error) {
-        console.error('❌ Failed to refresh live QR viewer:', error);
-    }
 }
 
 /**
