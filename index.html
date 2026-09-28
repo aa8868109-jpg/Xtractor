@@ -2,6 +2,9 @@
 <html lang="en" dir="ltr">
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate, max-age=0">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Xtractor — Smart Attendance System</title>
     <link rel="icon" type="image/png" href="/logo.png">
@@ -1391,12 +1394,23 @@
     </div><!-- /.container -->
 
     <script>
-        // Load the current app source instead of the stale minified bundle.
-        // The production server is still serving an older app.min.js in some deployments,
-        // so we intentionally bypass that cache issue and use the live source file.
+        // Always load the current app source and detect stale bootstraps.
+        // Older cached bundles can still call legacy GET /api/auth handlers, so we
+        // force a fresh load and abort if the boot marker is missing.
         const _appScript = document.createElement('script');
         const _appSource = 'app.js';
-        _appScript.src = `${_appSource}?_cb=${Date.now()}`;
+        const _cacheBust = Date.now();
+        _appScript.src = `${_appSource}?_cb=${_cacheBust}`;
+        _appScript.onload = () => {
+            if (!window.__XTRACTOR_APP_BOOT__) {
+                console.warn('Missing app boot marker; forcing a fresh load.');
+                window.location.reload();
+            }
+        };
+        _appScript.onerror = () => {
+            console.error('Failed to load app.js; retrying with a fresh cache-busted URL.');
+            _appScript.src = `${_appSource}?_cb=${Date.now() + 1}`;
+        };
         document.body.appendChild(_appScript);
     </script>
 

@@ -2,6 +2,8 @@
 // Xtractor Smart Attendance System - Main Application File
 // ============================================
 
+window.__XTRACTOR_APP_BOOT__ = 'xtractor-boot-v2026-09-28';
+
 // ====== Basic Variables and Constants ======
 
 // Backend data is served from Firestore through the server proxy.
