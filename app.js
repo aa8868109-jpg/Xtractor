@@ -561,8 +561,9 @@ async function getSelectedLectureFromMode() {
     } catch (error) {
         console.error('❌ خطأ في قراءة جدول MODE:', error);
         if (error.response?.status === 401 || error.response?.status === 403) {
-            console.error('❌ خطأ في المصادقة: تحقق من إعدادات Firebase');
-            showAlert('❌ تعذر التحقق من إعدادات البيانات.', 'error');
+            const reason = error.response?.data?.reason || 'invalid_session';
+            console.error('❌ فشل المصادقة أو الجلسة غير صالحة:', reason);
+            showAlert('❌ الرجاء التحقق من بيانات الدخول أو حالة الطالب.', 'error');
         } else if (error.message === 'Network Error') {
             console.error('❌ خطأ في الاتصال بالإنترنت');
         }
@@ -2550,7 +2551,24 @@ async function submitStudentCode() {
                 axios.defaults.headers.common.Authorization = `Bearer ${token}`;
             }
         }
-        if (authResponse?.data?.authenticated && authResponse.data.role === 'doctor') {
+
+        if (!authResponse || !authResponse.data || authResponse.data.authenticated !== true) {
+            const reason = authResponse?.data?.reason || 'unknown';
+            const reasonText = reason === 'student_mode_disabled'
+                ? 'وضع الطالب غير مفعل أو لا توجد محاضرة نشطة.'
+                : reason === 'student_not_found'
+                    ? 'الكود غير موجود في جدول المحاضرة الحالية.'
+                    : reason === 'invalid_format'
+                        ? 'صيغة الكود غير صحيحة.'
+                        : reason === 'invalid_input'
+                            ? 'يرجى إدخال كود صحيح.'
+                            : 'فشل تسجيل الدخول. يرجى التحقق من الكود وحالة المحاضرة.';
+            showAlert(`❌ ${reasonText}`, 'error');
+            if (signInBtn) signInBtn.disabled = false;
+            return;
+        }
+
+        if (authResponse.data.role === 'doctor') {
             showDoctorInterface();
             if (signInBtn) signInBtn.disabled = false;
             return;

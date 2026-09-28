@@ -35,7 +35,7 @@ module.exports = async function handler(req, res) {
         const submittedCode = String(req.body?.code || '').trim();
         if (!submittedCode || submittedCode.length > 128 || /[\u0000-\u001F\u007F]/.test(submittedCode)) {
             logSecurityEvent('invalid_auth_input', { req, submittedCodeLength: submittedCode.length });
-            return res.status(401).json({ authenticated: false });
+            return res.status(401).json({ authenticated: false, reason: 'invalid_input' });
         }
 
         const firestore = getFirestore();
@@ -54,7 +54,7 @@ module.exports = async function handler(req, res) {
 
         if (!/^[A-Za-z0-9\-_]+$/.test(submittedCode)) {
             logSecurityEvent('student_login_invalid_format', { req, submittedCode });
-            return res.status(401).json({ authenticated: false });
+            return res.status(401).json({ authenticated: false, reason: 'invalid_format' });
         }
 
         const modeSnap = await firestore.collection('MODE').doc('Website Status').get();
@@ -64,14 +64,14 @@ module.exports = async function handler(req, res) {
 
         if (!lectureNumber || !isModeEnabled) {
             logSecurityEvent('student_login_disabled', { req, lectureNumber, isModeEnabled });
-            return res.status(401).json({ authenticated: false });
+            return res.status(401).json({ authenticated: false, reason: 'student_mode_disabled' });
         }
 
         const lectureRef = firestore.collection(`LEC_${lectureNumber}`);
         const studentSnap = await lectureRef.where('Code', '==', submittedCode).limit(1).get();
         if (studentSnap.empty) {
             logSecurityEvent('student_login_failed', { req, lectureNumber, submittedCode });
-            return res.status(401).json({ authenticated: false });
+            return res.status(401).json({ authenticated: false, reason: 'student_not_found' });
         }
 
         const token = createSessionToken({ role: 'student', userCode: submittedCode, lecture: lectureNumber, issuedAt: Date.now() });
