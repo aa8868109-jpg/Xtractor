@@ -264,6 +264,30 @@ function ensureAxiosConfigured() {
     return false;
 }
 
+const _lazyScriptLoads = new Map();
+
+function loadScriptOnce(src, globalName) {
+    if (window[globalName]) return Promise.resolve(window[globalName]);
+    if (_lazyScriptLoads.has(src)) return _lazyScriptLoads.get(src);
+
+    const loadPromise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        script.onload = () => window[globalName]
+            ? resolve(window[globalName])
+            : reject(new Error(`${globalName} did not initialize`));
+        script.onerror = () => reject(new Error(`Failed to load ${globalName}`));
+        document.head.appendChild(script);
+    }).catch(error => {
+        _lazyScriptLoads.delete(src);
+        throw error;
+    });
+
+    _lazyScriptLoads.set(src, loadPromise);
+    return loadPromise;
+}
+
 ensureAxiosConfigured();
 
 async function getModeRecord(forceRefresh = false) {
@@ -1735,7 +1759,7 @@ function updateLocationStatus(status) {
 /**
  * Start QR Scanner - Mobile Optimized
  */
-function startScanner() {
+async function startScanner() {
     const startBtn = document.getElementById('start-scanner-btn');
     startBtn.style.display = 'none';
     
@@ -1748,6 +1772,15 @@ function startScanner() {
         statusEl.classList.add('scanning');
     }
     
+    try {
+        await loadScriptOnce('/vendor/html5-qrcode.min.js', 'Html5Qrcode');
+    } catch (error) {
+        console.error('Failed to load QR scanner library:', error);
+        showAlert('تعذر تحميل ماسح QR. تحقق من الاتصال ثم حاول مرة أخرى.', 'error');
+        stopScanner();
+        return;
+    }
+
     // Initialize html5-qrcode library with optimized settings
     qrScanner = new Html5Qrcode('qr_reader');
     
@@ -2264,13 +2297,6 @@ function applyProfessionalFormatting(worksheet, startRow = 1, endRow = 1) {
  * Export multiple lectures data to Excel with proper tables
  */
 async function exportMultipleLectures() {
-    // Check if ExcelJS library is loaded
-    if (typeof ExcelJS === 'undefined') {
-        showAlert('❌ مكتبة Excel لم تحمل بعد. حاول في لحظة', 'error');
-        console.error('ExcelJS library not loaded');
-        return;
-    }
-
     try {
         // Get selected lectures
         const selectedCheckboxes = document.querySelectorAll('.lecture-checkbox:checked');
@@ -2279,6 +2305,7 @@ async function exportMultipleLectures() {
             return;
         }
 
+        await loadScriptOnce('/vendor/exceljs.min.js', 'ExcelJS');
         showAlert('📊 جاري تصدير البيانات من المحاضرات المختارة...', 'info');
 
         const selectedLectures = Array.from(selectedCheckboxes).map(cb => ({
@@ -2437,19 +2464,13 @@ async function exportMultipleLectures() {
  * Export students attendance data to Excel with proper table
  */
 async function exportToExcel() {
-    // Check if ExcelJS library is loaded
-    if (typeof ExcelJS === 'undefined') {
-        showAlert('❌ مكتبة Excel لم تحمل بعد. حاول في لحظة', 'error');
-        console.error('ExcelJS library not loaded');
-        return;
-    }
-
     if (!currentLectureNumber) {
         showAlert('⚠️ Please select a lecture first', 'warning');
         return;
     }
 
     try {
+        await loadScriptOnce('/vendor/exceljs.min.js', 'ExcelJS');
         showAlert('📊 جاري تصدير البيانات...', 'info');
         
         // Fetch all students from the lecture

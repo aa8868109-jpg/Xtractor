@@ -2,6 +2,10 @@
   "name": "xtractor_app_server",
   "version": "1.0.0",
   "description": "Xtractor Vercel app backed by Firestore",
+  "scripts": {
+    "check": "node --check app.js && node --check api/index.js && node --check api/auth.js && node --check api/firebase.js && node --check api/protection.js && node --check api/rate-limit.js && node --check api/security-logger.js && node --check api/session.js && node --check \"api/data/[...slug].js\"",
+    "test": "node --test"
+  },
   "dependencies": {
     "firebase-admin": "^14.5.0"
   },

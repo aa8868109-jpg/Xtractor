@@ -3,4 +3,3 @@
 firebase-service-account.json
 server.*
 !app.js
-!app.min.js

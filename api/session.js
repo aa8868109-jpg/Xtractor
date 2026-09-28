@@ -4,7 +4,12 @@ const SESSION_TTL_MS = 60 * 60 * 1000;
 const SESSION_COOKIE_NAME = 'xtractor_session';
 
 function getSessionSecret() {
-  return process.env.XTRACTOR_SESSION_SECRET || process.env.SESSION_SECRET || 'xtractor-local-dev-secret-change-me';
+  const secret = process.env.XTRACTOR_SESSION_SECRET || process.env.SESSION_SECRET;
+  if (secret) return secret;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('XTRACTOR_SESSION_SECRET must be configured in production');
+  }
+  return 'xtractor-local-dev-secret-change-me';
 }
 
 function toBase64Url(value) {

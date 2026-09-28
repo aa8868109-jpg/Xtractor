@@ -106,14 +106,14 @@ module.exports = async function handler(req, res) {
         const expectedPassword = snapshot.exists ? snapshot.data().Dr_Pass : '';
 
         if (safeEqual(submittedCode, expectedPassword)) {
-            const token = createSessionToken({ role: 'doctor', userCode: submittedCode, issuedAt: Date.now() });
+            const token = createSessionToken({ role: 'doctor', issuedAt: Date.now() });
             setSessionCookie(res, token, req);
-            logSecurityEvent('doctor_login_success', { req, userCode: submittedCode });
+            logSecurityEvent('doctor_login_success', { req });
             return res.json({ authenticated: true, role: 'doctor', token });
         }
 
         if (!/^[A-Za-z0-9\-_]+$/.test(submittedCode)) {
-            logSecurityEvent('student_login_invalid_format', { req, submittedCode });
+            logSecurityEvent('student_login_invalid_format', { req, submittedCodeLength: submittedCode.length });
             return res.status(401).json({ authenticated: false, reason: 'invalid_format' });
         }
 
@@ -130,7 +130,7 @@ module.exports = async function handler(req, res) {
         const lectureRef = firestore.collection(`LEC_${lectureNumber}`);
         const studentDoc = await findStudentDocument(lectureRef, submittedCode);
         if (!studentDoc) {
-            logSecurityEvent('student_login_failed', { req, lectureNumber, submittedCode });
+            logSecurityEvent('student_login_failed', { req, lectureNumber });
             return res.status(401).json({ authenticated: false, reason: 'student_not_found' });
         }
 
@@ -143,36 +143,36 @@ module.exports = async function handler(req, res) {
         const allowLegacyIpMigration = Boolean(storedIp && storedIp !== clientIp && isPrivateIpv4(storedIp));
 
         if (!clientIp || clientIp === 'Unknown' || clientIp === 'unknown' || clientIp === '127.0.0.1' || clientIp === '::1') {
-            logSecurityEvent('student_login_missing_ip', { req, lectureNumber, submittedCode, clientIp });
+            logSecurityEvent('student_login_missing_ip', { req, lectureNumber, clientIp });
             return res.status(401).json({ authenticated: false, reason: 'device_ip_missing' });
         }
 
         if (!incomingFingerprint) {
-            logSecurityEvent('student_login_missing_fingerprint', { req, lectureNumber, submittedCode });
+            logSecurityEvent('student_login_missing_fingerprint', { req, lectureNumber });
             return res.status(401).json({ authenticated: false, reason: 'device_fingerprint_missing' });
         }
 
         if (storedIp === 'Unknown' || storedIp === 'unknown') {
-            logSecurityEvent('student_login_stored_unknown_ip', { req, lectureNumber, submittedCode, storedIp });
+            logSecurityEvent('student_login_stored_unknown_ip', { req, lectureNumber, storedIp });
             return res.status(401).json({ authenticated: false, reason: 'device_ip_missing' });
         }
 
         if (storedIp && storedIp !== 'Unknown' && storedIp !== clientIp && !allowLegacyIpMigration) {
-            logSecurityEvent('student_login_ip_conflict', { req, lectureNumber, submittedCode, storedIp, clientIp });
+            logSecurityEvent('student_login_ip_conflict', { req, lectureNumber, storedIp, clientIp });
             return res.status(401).json({ authenticated: false, reason: 'device_ip_conflict' });
         }
 
         if (allowLegacyIpMigration) {
-            logSecurityEvent('student_login_legacy_ip_migration', { req, lectureNumber, submittedCode });
+            logSecurityEvent('student_login_legacy_ip_migration', { req, lectureNumber });
         }
 
         if (storedFingerprint && incomingFingerprint && storedFingerprint !== incomingFingerprint) {
-            logSecurityEvent('student_login_fingerprint_conflict', { req, lectureNumber, submittedCode, storedFingerprint: storedFingerprint.slice(0, 32), incomingFingerprint: incomingFingerprint.slice(0, 32) });
+            logSecurityEvent('student_login_fingerprint_conflict', { req, lectureNumber });
             return res.status(401).json({ authenticated: false, reason: 'device_fingerprint_conflict' });
         }
 
         if (!studentCodeFromDoc || studentCodeFromDoc === 'UNKNOWN' || studentCodeFromDoc === 'unknown') {
-            logSecurityEvent('student_login_missing_code', { req, lectureNumber, submittedCode, docId: studentDoc.id });
+            logSecurityEvent('student_login_missing_code', { req, lectureNumber });
             return res.status(401).json({ authenticated: false, reason: 'student_code_missing' });
         }
 
@@ -184,7 +184,7 @@ module.exports = async function handler(req, res) {
                     return docCode && docCode !== String(submittedCode).trim();
                 });
                 if (conflictingStudent) {
-                    logSecurityEvent('student_login_shared_fingerprint_detected', { req, lectureNumber, submittedCode, conflictCode: String(conflictingStudent.data()?.Code || conflictingStudent.id || '') });
+                    logSecurityEvent('student_login_shared_fingerprint_detected', { req, lectureNumber });
                     return res.status(401).json({ authenticated: false, reason: 'shared_device_fingerprint' });
                 }
             }
@@ -192,7 +192,7 @@ module.exports = async function handler(req, res) {
 
         const token = createSessionToken({ role: 'student', userCode: submittedCode, lecture: lectureNumber, issuedAt: Date.now() });
         setSessionCookie(res, token, req);
-        logSecurityEvent('student_login_success', { req, lectureNumber, userCode: submittedCode });
+        logSecurityEvent('student_login_success', { req, lectureNumber });
         return res.json({ authenticated: true, role: 'student', token, deviceIp: clientIp, allowLegacyIpMigration });
     } catch (error) {
         logSecurityEvent('authentication_error', { req, message: error.message || String(error) });
