@@ -26,6 +26,30 @@ function setSessionCookie(res, token, req = null) {
     res.setHeader('Set-Cookie', cookieValue);
 }
 
+async function findStudentDocument(lectureRef, submittedCode) {
+    if (!lectureRef || !submittedCode) return null;
+
+    try {
+        const byDocumentId = await lectureRef.doc(submittedCode).get();
+        if (byDocumentId.exists) {
+            return byDocumentId;
+        }
+    } catch (error) {
+        console.warn('findStudentDocument doc-id lookup failed:', error.message || error);
+    }
+
+    try {
+        const byCodeField = await lectureRef.where('Code', '==', submittedCode).limit(1).get();
+        if (!byCodeField.empty) {
+            return byCodeField.docs[0];
+        }
+    } catch (error) {
+        console.warn('findStudentDocument Code-field lookup failed:', error.message || error);
+    }
+
+    return null;
+}
+
 module.exports = async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'method_not_allowed' });
@@ -68,8 +92,8 @@ module.exports = async function handler(req, res) {
         }
 
         const lectureRef = firestore.collection(`LEC_${lectureNumber}`);
-        const studentSnap = await lectureRef.where('Code', '==', submittedCode).limit(1).get();
-        if (studentSnap.empty) {
+        const studentDoc = await findStudentDocument(lectureRef, submittedCode);
+        if (!studentDoc) {
             logSecurityEvent('student_login_failed', { req, lectureNumber, submittedCode });
             return res.status(401).json({ authenticated: false, reason: 'student_not_found' });
         }
