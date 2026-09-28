@@ -175,6 +175,24 @@ module.exports = async function handler(req, res) {
       return res.status(403).json({ error: 'forbidden_role' });
     }
 
+    if (method === 'GET' && documentId) {
+      if (session.role === 'student' && String(documentId).trim() !== String(session.userCode || '').trim()) {
+        return res.status(403).json({ error: 'student_insufficient_scope' });
+      }
+
+      const byDocId = await ref.doc(documentId).get();
+      if (byDocId.exists) {
+        return res.json({ records: [toRecord(byDocId, collection)] });
+      }
+
+      const byCodeField = await ref.where('Code', '==', documentId).limit(1).get();
+      if (!byCodeField.empty) {
+        return res.json({ records: byCodeField.docs.map(doc => toRecord(doc, collection)) });
+      }
+
+      return res.json({ records: [] });
+    }
+
     if (method === 'GET') {
       if (match && match[1] === 'Code') {
         if (session.role === 'student' && match[2] !== session.userCode) {
@@ -219,8 +237,9 @@ module.exports = async function handler(req, res) {
         if (!documentId) return res.status(400).json({ error: 'missing_document_id' });
         const current = await ref.doc(documentId).get();
         if (!current.exists) return res.status(404).json({ error: 'record_not_found' });
-        const currentCode = String(current.data().Code || '').trim();
-        if (currentCode !== session.userCode) {
+        const currentCode = String(current.data()?.Code || current.id || '').trim();
+        const currentDocId = String(current.id || '').trim();
+        if (currentCode !== session.userCode && currentDocId !== session.userCode) {
           return res.status(403).json({ error: 'student_forbidden' });
         }
       }

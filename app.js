@@ -1249,6 +1249,16 @@ function normalizeStudentNameField(fields = {}) {
 async function findStudent(studentCode, lectureNumber = null) {
     try {
         const tableName = lectureNumber ? `LEC_${lectureNumber}` : STUDENTS_TABLE;
+
+        const directResponse = await apiGet(
+            `/api/data/${encodeURIComponent(tableName)}/${encodeURIComponent(studentCode)}`,
+            { headers: getDataHeaders() }
+        );
+        const directStudent = directResponse?.data?.records?.[0];
+        if (directStudent) {
+            return directStudent;
+        }
+
         const response = await apiGet(
             `/api/data/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
             { headers: getDataHeaders() }
@@ -1287,27 +1297,31 @@ async function findStudent(studentCode, lectureNumber = null) {
  * Save the student's login data with one write after the record was resolved.
  */
 async function saveStudentLoginData(studentCode, lectureNumber, studentName, studentRecord) {
-    if (!studentRecord?.id || !studentLocation) return false;
+    if (!studentRecord?.id) return false;
 
     try {
         const tableName = `LEC_${lectureNumber}`;
-        const mapsLink = `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`;
-        const region = checkGeographicRegion();
+        const mapsLink = studentLocation
+            ? `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`
+            : '';
+        const region = checkGeographicRegion && typeof checkGeographicRegion === 'function' ? checkGeographicRegion() : 'Unknown';
         await axios.patch(
             `/api/data/${encodeURIComponent(tableName)}`,
             {
                 id: studentRecord.id,
                 fields: {
                     'Device IP': deviceIP || 'Unknown',
-                    'Location': mapsLink,
-                    'Region': region,
+                    ...(mapsLink ? { 'Location': mapsLink } : {}),
+                    ...(region ? { 'Region': region } : {}),
                     ...(studentName ? { name: studentName } : {})
                 }
             },
             { headers: getDataHeaders() }
         );
-        lastSavedLocation = { lat: studentLocation.lat, lng: studentLocation.lng };
-        lastLocationWriteAt = Date.now();
+        if (studentLocation) {
+            lastSavedLocation = { lat: studentLocation.lat, lng: studentLocation.lng };
+            lastLocationWriteAt = Date.now();
+        }
         return true;
     } catch (error) {
         console.error('Error saving student login data:', error);
