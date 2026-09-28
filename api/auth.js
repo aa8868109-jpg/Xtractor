@@ -49,7 +49,7 @@ function getStudentCodeCandidates(doc, fallbackCode = '') {
         data.StudentCode,
         doc?.id || ''
     ];
-    return Array.from(new Set(values.filter(value => typeof value === 'string' ? value.trim() : value !== undefined && value !== null && String(value).trim()))).map(String).map(value => value.trim()));
+    return Array.from(new Set(values.filter(value => typeof value === 'string' ? value.trim() : value !== undefined && value !== null && String(value).trim()))).map(String).map(value => value.trim());
 }
 
 async function findStudentDocument(lectureRef, submittedCode) {
