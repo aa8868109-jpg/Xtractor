@@ -1220,8 +1220,10 @@ function getStudentCodeFromRecord(recordOrFields = {}) {
 
 function getDataHeaders() {
     const fingerprint = getDeviceFingerprint();
+    const sessionToken = getCurrentSessionToken();
     return {
         'Content-Type': 'application/json',
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
         ...(fingerprint ? { 'X-Device-Fingerprint': fingerprint } : {})
     };
 }
