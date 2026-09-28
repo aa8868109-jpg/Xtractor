@@ -55,6 +55,26 @@ function toRecord(doc, collection = '') {
   return { id: doc.id, fields };
 }
 
+async function findStudentRecordByIdentity(ref, studentCode) {
+  if (!ref || !studentCode) return null;
+
+  try {
+    const byDocId = await ref.doc(studentCode).get();
+    if (byDocId.exists) return byDocId;
+  } catch (error) {
+    console.warn('Student doc-id lookup failed:', error.message || error);
+  }
+
+  try {
+    const byCodeField = await ref.where('Code', '==', studentCode).limit(1).get();
+    if (!byCodeField.empty) return byCodeField.docs[0];
+  } catch (error) {
+    console.warn('Student Code-field lookup failed:', error.message || error);
+  }
+
+  return null;
+}
+
 function sanitizeFields(fields) {
   if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
     return {};
@@ -156,21 +176,37 @@ module.exports = async function handler(req, res) {
     }
 
     if (method === 'GET') {
-      if (session.role === 'student') {
-        const requestedCode = match && match[1] === 'Code' ? match[2] : null;
-        if (!requestedCode || requestedCode !== session.userCode) {
+      if (match && match[1] === 'Code') {
+        if (session.role === 'student' && match[2] !== session.userCode) {
           return res.status(403).json({ error: 'student_insufficient_scope' });
         }
+        const snap = await findStudentRecordByIdentity(ref, match[2]);
+        return res.json({ records: snap ? [toRecord(snap, collection)] : [] });
       }
 
-      if (match && match[1] === 'Code') {
-        const snap = await ref.doc(match[2]).get();
-        return res.json({ records: snap.exists ? [toRecord(snap, collection)] : [] });
-      }
       if (match && match[1] === 'Device IP') {
-        const snaps = await ref.where('Device_ip', '==', match[2]).get();
+        const requestedIP = String(match[2] || '').trim();
+        if (session.role === 'student') {
+          const myRecord = await findStudentRecordByIdentity(ref, session.userCode);
+          if (!myRecord) {
+            return res.status(403).json({ error: 'student_insufficient_scope' });
+          }
+
+          const myDeviceIP = String(myRecord.data()?.Device_ip || myRecord.data()?.['Device IP'] || '').trim();
+          if (!myDeviceIP) {
+            return res.status(403).json({ error: 'student_device_not_registered' });
+          }
+          if (myDeviceIP !== requestedIP) {
+            return res.status(403).json({ error: 'student_device_mismatch' });
+          }
+
+          return res.json({ records: [toRecord(myRecord, collection)] });
+        }
+
+        const snaps = await ref.where('Device_ip', '==', requestedIP).get();
         return res.json({ records: snaps.docs.map(doc => toRecord(doc, collection)) });
       }
+
       if (session.role === 'student') {
         return res.status(403).json({ error: 'student_not_allowed_to_read_all_records' });
       }
