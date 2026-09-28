@@ -26,6 +26,18 @@ function setSessionCookie(res, token, req = null) {
     res.setHeader('Set-Cookie', cookieValue);
 }
 
+function getClientIp(req) {
+    const forwarded = String(req?.headers?.['x-forwarded-for'] || req?.headers?.['X-Forwarded-For'] || '').trim();
+    const firstForward = forwarded.split(',')[0]?.trim();
+    const direct = req?.headers?.['x-real-ip'] || req?.headers?.['X-Real-IP'] || req?.headers?.['cf-connecting-ip'] || req?.headers?.['CF-Connecting-IP'] || '';
+    const ip = firstForward || direct || req?.socket?.remoteAddress || 'Unknown';
+    return String(ip).replace(/^::ffff:/, '').trim() || 'Unknown';
+}
+
+function normalizeFingerprint(value) {
+    return String(value || '').trim().replace(/\s+/g, '').slice(0, 256);
+}
+
 async function findStudentDocument(lectureRef, submittedCode) {
     if (!lectureRef || !submittedCode) return null;
 
@@ -96,6 +108,50 @@ module.exports = async function handler(req, res) {
         if (!studentDoc) {
             logSecurityEvent('student_login_failed', { req, lectureNumber, submittedCode });
             return res.status(401).json({ authenticated: false, reason: 'student_not_found' });
+        }
+
+        const clientIp = getClientIp(req);
+        const incomingFingerprint = normalizeFingerprint(req.body?.deviceFingerprint || req.headers?.['x-device-fingerprint'] || req.headers?.['X-Device-Fingerprint'] || '');
+        const studentData = studentDoc.data() || {};
+        const storedIp = String(studentData.Device_ip || studentData['Device IP'] || '').trim();
+        const storedFingerprint = normalizeFingerprint(studentData.Device_Fingerprint || studentData.deviceFingerprint || studentData['Device Fingerprint'] || '');
+
+        if (storedIp && storedIp !== 'Unknown' && storedIp !== clientIp) {
+            logSecurityEvent('student_login_ip_conflict', { req, lectureNumber, submittedCode, storedIp, clientIp });
+            return res.status(401).json({ authenticated: false, reason: 'device_ip_conflict' });
+        }
+
+        if (storedFingerprint && incomingFingerprint && storedFingerprint !== incomingFingerprint) {
+            logSecurityEvent('student_login_fingerprint_conflict', { req, lectureNumber, submittedCode, storedFingerprint: storedFingerprint.slice(0, 32), incomingFingerprint: incomingFingerprint.slice(0, 32) });
+            return res.status(401).json({ authenticated: false, reason: 'device_fingerprint_conflict' });
+        }
+
+        if (clientIp && clientIp !== 'Unknown' && clientIp !== '127.0.0.1') {
+            const sameIpMatches = await lectureRef.where('Device_ip', '==', clientIp).limit(10).get();
+            if (!sameIpMatches.empty) {
+                const conflictingStudent = sameIpMatches.docs.find(doc => {
+                    const docCode = String(doc.data()?.Code || doc.id || '').trim();
+                    return docCode && docCode !== String(submittedCode).trim();
+                });
+                if (conflictingStudent) {
+                    logSecurityEvent('student_login_shared_ip_detected', { req, lectureNumber, submittedCode, conflictCode: String(conflictingStudent.data()?.Code || conflictingStudent.id || '') });
+                    return res.status(401).json({ authenticated: false, reason: 'shared_device_ip' });
+                }
+            }
+        }
+
+        if (incomingFingerprint) {
+            const sameFingerprintMatches = await lectureRef.where('Device_Fingerprint', '==', incomingFingerprint).limit(10).get();
+            if (!sameFingerprintMatches.empty) {
+                const conflictingStudent = sameFingerprintMatches.docs.find(doc => {
+                    const docCode = String(doc.data()?.Code || doc.id || '').trim();
+                    return docCode && docCode !== String(submittedCode).trim();
+                });
+                if (conflictingStudent) {
+                    logSecurityEvent('student_login_shared_fingerprint_detected', { req, lectureNumber, submittedCode, conflictCode: String(conflictingStudent.data()?.Code || conflictingStudent.id || '') });
+                    return res.status(401).json({ authenticated: false, reason: 'shared_device_fingerprint' });
+                }
+            }
         }
 
         const token = createSessionToken({ role: 'student', userCode: submittedCode, lecture: lectureNumber, issuedAt: Date.now() });

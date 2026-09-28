@@ -890,9 +890,8 @@ async function checkDeviceIPConflict(studentCode, lectureNumber, existingStudent
     console.log(`🔍 فحص تضارب IP: Code=${studentCode}, IP=${currentIP}, Lecture=${lectureNumber}`);
 
     if (!currentIP || currentIP === 'Unknown') {
-        console.warn('⚠️ Device IP unavailable on this device; blocking student access to prevent duplicate-account use on the same device.');
-        showAlert('❌ لا يمكن فتح صفحة الطالب لأن عنوان IP للجهاز غير متوفر أو غير صحيح. حاول من جهاز آخر أو تأكد من اتصال الشبكة.', 'error');
-        return false;
+        console.warn('⚠️ Device IP unavailable on this device; relying on server-side IP validation for final safety.');
+        return true;
     }
 
     try {
@@ -1188,8 +1187,38 @@ function resetQRCheckboxes() {
 /**
  * Create HTTP request headers for the local Firebase proxy.
  */
+function getDeviceFingerprint() {
+    try {
+        const nav = navigator || {};
+        const screenObj = screen || {};
+        const parts = [
+            nav.userAgent || '',
+            nav.platform || '',
+            nav.language || '',
+            nav.vendor || '',
+            nav.hardwareConcurrency || '',
+            nav.maxTouchPoints || '',
+            screenObj.width || '',
+            screenObj.height || '',
+            screenObj.colorDepth || '',
+            screenObj.pixelDepth || '',
+            Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+            `${window.innerWidth || ''}x${window.innerHeight || ''}`
+        ];
+        const raw = parts.join('|');
+        return btoa(unescape(encodeURIComponent(raw))).slice(0, 256);
+    } catch (error) {
+        console.warn('Could not generate device fingerprint:', error?.message || error);
+        return '';
+    }
+}
+
 function getDataHeaders() {
-    return { 'Content-Type': 'application/json' };
+    const fingerprint = getDeviceFingerprint();
+    return {
+        'Content-Type': 'application/json',
+        ...(fingerprint ? { 'X-Device-Fingerprint': fingerprint } : {})
+    };
 }
 
 function escapeHtml(value) {
@@ -2544,7 +2573,10 @@ async function submitStudentCode() {
                 method: 'POST',
                 credentials: 'include',
                 headers: getDataHeaders(),
-                body: JSON.stringify({ code: codeInput })
+                body: JSON.stringify({
+                    code: codeInput,
+                    deviceFingerprint: getDeviceFingerprint()
+                })
             }).catch(() => null);
             if (raw) {
                 const text = await raw.text();
