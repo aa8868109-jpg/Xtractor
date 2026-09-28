@@ -20,12 +20,17 @@ let lockLink = '';
 
 // Runtime traffic is routed through the Firestore proxy only.
 
-// ====== Pre-programmed QR Codes ======
+// ====== QR Handling ======
 const QR_CODES = {
     qr1: '8CmsmS],lZmK$3%ge_=0].1hf]&o>7D)0c)(y^#cpe<9u!8a<oNUqN6"E1(08Dl5',
     qr2: 't:0+9n"$vf;[/%:xLqn&!sr@c!paHn12}UP02"nKif{a0g@(KXi&sl\\1FUEj.S]1',
     qr3: '!#W"{SeNLOX05@dOGg=^Cxx1z>)bIA2l|<DG8Tn<]_pOV97`CR1zIeBg(iiPvv`>'
 };
+const LIVE_QR_INTERVAL_MS = 1500;
+const LIVE_QR_TTL_MS = 1400;
+let liveQrTimer = null;
+let currentLiveQrValue = null;
+let currentLiveQrExpiresAt = 0;
 
 // Geographic region coordinates (4 points forming a rectangle)
 const GEO_BOUNDARIES = [
@@ -698,26 +703,28 @@ async function selectQRCode(qrValue) {
     
     if (!currentLectureNumber) {
         showAlert('⚠️ Please select a lecture number first', 'warning');
-        // Deselect radio button
         const radios = document.querySelectorAll('input[name="qr-select"]');
         radios.forEach(r => r.checked = false);
         return;
     }
+
+    if (qrValue === 'LIVE') {
+        stopLiveQrGenerator();
+        startLiveQrGenerator();
+        return;
+    }
     
+    stopLiveQrGenerator();
     console.log(`🎚️ Select QR Code: ${qrValue}`);
-    
-    // Update MODE table with selected QR
     const success = await updateSelectedQR(currentLectureNumber, qrValue);
     
     if (!success) {
         showAlert('❌ Failed to update QR selection', 'error');
-        // Deselect radio button
         const radios = document.querySelectorAll('input[name="qr-select"]');
         radios.forEach(r => r.checked = false);
         return;
     }
     
-    // Update UI status text
     if (qrValue === 'NONE') {
         statusDiv.textContent = '✗ Status: No QR Selected';
         statusDiv.style.color = '#c62828';
@@ -793,19 +800,177 @@ async function updateQRSelectionDisplay() {
             if (qrSelected === 'NONE' || !qrSelected) {
                 statusDiv.textContent = '✗ Status: No QR Selected';
                 statusDiv.style.color = '#c62828';
+            } else if (String(qrSelected).startsWith('XTRACTOR-')) {
+                statusDiv.textContent = '✓ Status: Live QR Active';
+                statusDiv.style.color = '#2e7d32';
             } else {
                 statusDiv.textContent = `✓ Status: ${qrSelected} Active`;
                 statusDiv.style.color = '#2e7d32';
             }
         }
         
-        // Set radio button
+        const liveRadio = document.querySelector('input[name="qr-select"][value="LIVE"]');
+        if (liveRadio) {
+            liveRadio.checked = String(qrSelected).startsWith('XTRACTOR-');
+        }
+
         const radio = document.querySelector(`input[name="qr-select"][value="${qrSelected}"]`);
         if (radio) {
             radio.checked = true;
         }
     } catch (error) {
         console.error('⚠️ Error updating QR selection display:', error.message);
+    }
+}
+
+function generateLiveQrValue() {
+    const token = `XTRACTOR-${Date.now()}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 6)}`;
+    currentLiveQrValue = token;
+    currentLiveQrExpiresAt = Date.now() + LIVE_QR_TTL_MS;
+    return token;
+}
+
+function buildQrImageUrl(qrValue) {
+    return `https://api.qrserver.com/v1/create-qr-code/?size=360x360&data=${encodeURIComponent(qrValue)}`;
+}
+
+function isLiveQrValue(value) {
+    return typeof value === 'string' && value.startsWith('XTRACTOR-');
+}
+
+function renderLiveQrImage(qrValue) {
+    const imageEl = document.getElementById('live-qr-image');
+    if (imageEl) {
+        imageEl.src = buildQrImageUrl(qrValue || '');
+        imageEl.alt = 'Live QR code';
+    }
+
+    const viewerImage = document.getElementById('live-qr-display-image');
+    if (viewerImage) {
+        viewerImage.src = buildQrImageUrl(qrValue || '');
+        viewerImage.alt = 'Current active QR code';
+    }
+
+    const preview = document.getElementById('live-qr-preview');
+    if (preview) {
+        preview.style.display = qrValue ? 'block' : 'none';
+    }
+}
+
+async function syncLiveQrToMode() {
+    if (!currentLectureNumber) {
+        return;
+    }
+
+    const qrValue = generateLiveQrValue();
+    currentLiveQrValue = qrValue;
+    try {
+        await axios.patch(
+            `/api/data/${encodeURIComponent(MODE_TABLE)}`,
+            {
+                fields: {
+                    'Lecture': String(currentLectureNumber),
+                    'QR Selected': qrValue,
+                    'Student Mode': 'ON'
+                }
+            },
+            { headers: getDataHeaders() }
+        );
+        invalidateModeRecordCache();
+        renderLiveQrImage(qrValue);
+        const statusDiv = document.getElementById('mode-status');
+        if (statusDiv) {
+            statusDiv.textContent = '✓ Status: Live QR Active';
+            statusDiv.style.color = '#2e7d32';
+        }
+    } catch (error) {
+        console.error('❌ Failed to sync live QR to MODE:', error);
+        showAlert('❌ Failed to sync live QR to the attendance control.', 'error');
+    }
+}
+
+function startLiveQrGenerator() {
+    if (!currentLectureNumber) {
+        showAlert('⚠️ Please select a lecture number first.', 'warning');
+        return;
+    }
+
+    if (liveQrTimer) {
+        clearInterval(liveQrTimer);
+    }
+
+    syncLiveQrToMode();
+    liveQrTimer = setInterval(syncLiveQrToMode, LIVE_QR_INTERVAL_MS);
+    showAlert('✓ Live QR generator started. Students can scan only the current code.', 'success');
+}
+
+function stopLiveQrGenerator() {
+    if (liveQrTimer) {
+        clearInterval(liveQrTimer);
+        liveQrTimer = null;
+    }
+    currentLiveQrValue = null;
+    currentLiveQrExpiresAt = 0;
+}
+
+async function toggleStudentMode(isEnabled) {
+    if (!currentLectureNumber) {
+        showAlert('⚠️ Please select a lecture number first.', 'warning');
+        return;
+    }
+
+    const success = await updateStudentMode(currentLectureNumber, isEnabled);
+    if (!success) {
+        showAlert('❌ Failed to update Student Mode.', 'error');
+        return;
+    }
+
+    if (isEnabled) {
+        startLiveQrGenerator();
+    } else {
+        stopLiveQrGenerator();
+        await updateSelectedQR(currentLectureNumber, 'NONE');
+        showAlert('✓ Student Mode stopped. QR access is disabled.', 'success');
+    }
+}
+
+async function openLiveQrPage() {
+    if (!currentLectureNumber) {
+        showAlert('⚠️ Please select a lecture number before opening the QR display.', 'warning');
+        return;
+    }
+
+    const popup = window.open(`${window.location.origin}${window.location.pathname}?view=qr`, '_blank', 'width=440,height=620');
+    if (popup) {
+        popup.focus();
+        if (!currentLiveQrValue) {
+            currentLiveQrValue = generateLiveQrValue();
+        }
+        renderLiveQrImage(currentLiveQrValue);
+    } else {
+        showAlert('⚠️ Popup blocked. Please allow popups and try again.', 'warning');
+    }
+}
+
+async function refreshLiveQrViewer() {
+    const viewMode = new URLSearchParams(window.location.search).get('view');
+    if (viewMode !== 'qr') return;
+
+    try {
+        const record = await getModeRecord(true);
+        const activeQr = record?.fields?.['QR Selected'];
+        const statusEl = document.getElementById('live-qr-status');
+        if (!activeQr || activeQr === 'NONE') {
+            if (statusEl) statusEl.textContent = 'No active QR is currently enabled.';
+            const viewerImage = document.getElementById('live-qr-display-image');
+            if (viewerImage) viewerImage.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+            return;
+        }
+
+        if (statusEl) statusEl.textContent = isLiveQrValue(activeQr) ? 'Live QR is active — students can scan only this code.' : `Active QR: ${activeQr}`;
+        renderLiveQrImage(activeQr);
+    } catch (error) {
+        console.error('❌ Failed to refresh live QR viewer:', error);
     }
 }
 
@@ -1874,11 +2039,8 @@ async function onQRScanned(decodedText) {
     }
 
     if (matchedQR && !scannedQRs[matchedQR]) {
-        // Check if this QR matches the one selected by doctor
         const selectedQR = await getSelectedQRFromMode();
-        
         if (selectedQR === 'NONE') {
-            // No QR is selected - reject scan
             if (statusEl) {
                 statusEl.textContent = `❌ No QR codes are active - Ask instructor to enable QR`;
                 statusEl.className = 'scanner-status';
@@ -1891,20 +2053,44 @@ async function onQRScanned(decodedText) {
             showAlert(`❌ No QR codes are active. Ask the instructor to enable a QR code.`, 'error');
             return;
         }
-        
-        if (qrValue !== selectedQR) {
-            // Wrong QR code - reject scan
-            if (statusEl) {
-                statusEl.textContent = `❌ Wrong QR! Only ${selectedQR} is active`;
-                statusEl.className = 'scanner-status';
-                setTimeout(() => {
-                    if (statusEl) {
-                        statusEl.textContent = '✓ Camera active - Point at QR code';
-                    }
-                }, 2500);
+
+        const normalizedScanned = String(decodedText).trim();
+        const normalizedSelected = String(selectedQR).trim();
+
+        if (isLiveQrValue(normalizedSelected)) {
+            if (normalizedSelected !== normalizedScanned) {
+                if (statusEl) {
+                    statusEl.textContent = `❌ Wrong QR! Only the current live QR is accepted.`;
+                    statusEl.className = 'scanner-status';
+                    setTimeout(() => {
+                        if (statusEl) {
+                            statusEl.textContent = '✓ Camera active - Point at QR code';
+                        }
+                    }, 2500);
+                }
+                showAlert('❌ You scanned an old or incorrect QR code. Please scan the current active QR only.', 'error');
+                return;
             }
-            showAlert(`❌ You scanned ${qrValue}, but only ${selectedQR} is active. Scan the correct QR code.`, 'error');
-            return;
+        } else if (matchedQR !== 'qr1' && matchedQR !== 'qr2' && matchedQR !== 'qr3') {
+            // Legacy static QRs from the original fixed set
+            const staticMap = {
+                qr1: 'QR_1',
+                qr2: 'QR_2',
+                qr3: 'QR_3'
+            };
+            if (staticMap[matchedQR] !== normalizedSelected) {
+                if (statusEl) {
+                    statusEl.textContent = `❌ Wrong QR! Only ${normalizedSelected} is active.`;
+                    statusEl.className = 'scanner-status';
+                    setTimeout(() => {
+                        if (statusEl) {
+                            statusEl.textContent = '✓ Camera active - Point at QR code';
+                        }
+                    }, 2500);
+                }
+                showAlert(`❌ You scanned ${staticMap[matchedQR] || 'an incorrect QR'}, but only ${normalizedSelected} is active.`, 'error');
+                return;
+            }
         }
         
         // تعيين flag المعالجة
@@ -2781,6 +2967,22 @@ function startContinuousLocationTracking() {
  * Initialize application on page load
  */
 document.addEventListener('DOMContentLoaded', async function() {
+    const viewMode = new URLSearchParams(window.location.search).get('view');
+    if (viewMode === 'qr') {
+        const viewContainer = document.getElementById('live-qr-page');
+        if (viewContainer) {
+            viewContainer.style.display = 'block';
+            const sections = ['login-section','student-section','doctor-panel','top-bar'];
+            sections.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+            });
+        }
+        refreshLiveQrViewer();
+        setInterval(refreshLiveQrViewer, 1500);
+        return;
+    }
+
     // Comprehensive cleanup of old storage data (safe)
     safeStorage.removeItem('deviceIdentifier');
     safeStorage.removeItem('device-id');
