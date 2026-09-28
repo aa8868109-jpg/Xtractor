@@ -893,7 +893,7 @@ async function getDeviceIP() {
  * و التحقق من أن الكود الجامعي لم يُستخدم من IP مختلف
  * استخدام جدول RAM الذي يسجل جلسات الدخول الحالية
  */
-async function checkDeviceIPConflict(studentCode, lectureNumber, existingStudentRecord = null) {
+async function checkDeviceIPConflict(studentCode, lectureNumber, existingStudentRecord = null, allowLegacyIpMigration = false) {
     const currentIP = await getDeviceIP();
     console.log(`🔍 فحص تضارب IP: Code=${studentCode}, IP=${currentIP}, Lecture=${lectureNumber}`);
 
@@ -938,7 +938,7 @@ async function checkDeviceIPConflict(studentCode, lectureNumber, existingStudent
             const resolvedCode = getStudentCodeFromRecord(studentRecord) || studentCode;
             console.log(`✓ وجد كود الطالب في ${tableName}: Code=${resolvedCode}, Device IP=${registeredIP}`);
             
-            if (registeredIP && registeredIP !== String(currentIP).trim() && registeredIP !== 'Unknown') {
+            if (registeredIP && registeredIP !== String(currentIP).trim() && registeredIP !== 'Unknown' && !allowLegacyIpMigration) {
                 // ❌ الكود نفسه عنده IP مختلف مسجل
                 console.warn(`❌ رفض الفحص الثاني: رمز الطالب عنده IP مختلف (${registeredIP} ≠ ${currentIP})`);
                 showAlert(`❌ رمز الطالب هذا مسجل من IP مختلف (${registeredIP}) - لا يمكن تسجيل الدخول من جهاز جديد`, 'error');
@@ -2638,6 +2638,12 @@ async function submitStudentCode() {
                         ? 'صيغة الكود غير صحيحة.'
                         : reason === 'invalid_input'
                             ? 'يرجى إدخال كود صحيح.'
+                            : reason === 'device_ip_conflict'
+                                ? 'هذا الكود مسجل بعنوان IP مختلف.'
+                                : reason === 'device_fingerprint_conflict'
+                                    ? 'هذا الكود مرتبط بجهاز مختلف.'
+                                    : reason === 'shared_device_ip' || reason === 'shared_device_fingerprint'
+                                        ? 'هذا الجهاز مرتبط بكود طالب آخر.'
                             : 'فشل تسجيل الدخول. يرجى التحقق من الكود وحالة المحاضرة.';
             showAlert(`❌ ${reasonText}`, 'error');
             if (signInBtn) signInBtn.disabled = false;
@@ -2671,10 +2677,14 @@ async function submitStudentCode() {
         }
 
         // Step 3: resolve the student in the selected lecture and determine the device IP.
-        const [student] = await Promise.all([
+        const [student, detectedDeviceIp] = await Promise.all([
             findStudent(codeInput, lectureNumber),
             getDeviceIP()
         ]);
+
+        deviceIP = hasValidDeviceIp(authResponse.data.deviceIp)
+            ? authResponse.data.deviceIp.trim()
+            : detectedDeviceIp;
 
         if (!student) {
             showAlert('Student code not found', 'error');
@@ -2683,7 +2693,12 @@ async function submitStudentCode() {
         }
 
         // Step 5: Security check (device IP conflict)
-        const isIPValid = await checkDeviceIPConflict(codeInput, lectureNumber, student);
+        const isIPValid = await checkDeviceIPConflict(
+            codeInput,
+            lectureNumber,
+            student,
+            authResponse.data.allowLegacyIpMigration === true
+        );
         if (!isIPValid) {
             if (signInBtn) signInBtn.disabled = false;
             return;
