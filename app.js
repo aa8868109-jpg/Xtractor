@@ -22,8 +22,8 @@ let lockLink = '';
 
 // ====== QR Handling ======
 const LIVE_QR_PREFIX = 'XTRACTOR-';
-const LIVE_QR_INTERVAL_MS = 1500;
-const LIVE_QR_TTL_MS = 1400;
+const LIVE_QR_INTERVAL_MS = 3000;
+const LIVE_QR_TTL_MS = 3000;
 let liveQrTimer = null;
 let currentLiveQrValue = null;
 let currentLiveQrExpiresAt = 0;
