@@ -36,6 +36,11 @@ function canonicalizeNameKey(key) {
   return key;
 }
 
+function getStudentCodeFromRecordData(data = {}, fallbackId = '') {
+  const value = data.Code ?? data.code ?? data['Student Code'] ?? data.studentCode ?? data.StudentCode ?? fallbackId ?? '';
+  return String(value || '').trim();
+}
+
 function toRecord(doc, collection = '') {
   const data = doc.data() || {};
   const fields = {};
@@ -51,7 +56,14 @@ function toRecord(doc, collection = '') {
       fields[canonicalKey.replace(/_/g, ' ')] = value;
     }
   }
-  if (/^LEC_\d+$/i.test(collection) && !fields.Code) fields.Code = doc.id;
+  if (/^LEC_\d+$/i.test(collection) && !fields.Code) {
+    const resolvedCode = getStudentCodeFromRecordData(data, doc.id);
+    if (resolvedCode && resolvedCode !== 'UNKNOWN' && resolvedCode !== 'unknown') {
+      fields.Code = resolvedCode;
+    } else {
+      fields.Code = doc.id;
+    }
+  }
   return { id: doc.id, fields };
 }
 
@@ -65,11 +77,13 @@ async function findStudentRecordByIdentity(ref, studentCode) {
     console.warn('Student doc-id lookup failed:', error.message || error);
   }
 
-  try {
-    const byCodeField = await ref.where('Code', '==', studentCode).limit(1).get();
-    if (!byCodeField.empty) return byCodeField.docs[0];
-  } catch (error) {
-    console.warn('Student Code-field lookup failed:', error.message || error);
+  for (const fieldName of ['Code', 'code', 'Student Code', 'studentCode', 'StudentCode']) {
+    try {
+      const byCodeField = await ref.where(fieldName, '==', studentCode).limit(1).get();
+      if (!byCodeField.empty) return byCodeField.docs[0];
+    } catch (error) {
+      console.warn(`Student ${fieldName} lookup failed:`, error.message || error);
+    }
   }
 
   return null;
@@ -106,7 +120,9 @@ function toFirestore(fields) {
     else if (key === '2nd QR' || key === '2nd_QR') result.qr_2 = value;
     else if (key === '3rd QR' || key === '3rd_QR') result.qr_3 = value;
     else if (key === 'Device IP' || key === 'Device_IP') result.Device_ip = value;
-    else result[key.replace(/\s+/g, '_')] = value;
+    else if (key === 'Code' || key === 'code') {
+      result.Code = value;
+    } else result[key.replace(/\s+/g, '_')] = value;
   }
   return result;
 }

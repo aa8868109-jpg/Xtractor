@@ -248,6 +248,14 @@ let scannedQRs = {
 let isProcessingQR = false; // Prevent concurrent processing
 let deviceIP = null; // Device IP address
 
+function hasValidDeviceIp(ip) {
+    if (!ip || typeof ip !== 'string') return false;
+    const normalized = ip.trim();
+    if (!normalized || normalized === 'Unknown' || normalized === 'unknown') return false;
+    if (normalized === '127.0.0.1' || normalized === '::1') return false;
+    return true;
+}
+
 function ensureAxiosConfigured() {
     if (typeof axios !== 'undefined' && axios && axios.defaults) {
         axios.defaults.withCredentials = true;
@@ -889,9 +897,10 @@ async function checkDeviceIPConflict(studentCode, lectureNumber, existingStudent
     const currentIP = await getDeviceIP();
     console.log(`🔍 فحص تضارب IP: Code=${studentCode}, IP=${currentIP}, Lecture=${lectureNumber}`);
 
-    if (!currentIP || currentIP === 'Unknown') {
-        console.warn('⚠️ Device IP unavailable on this device; relying on server-side IP validation for final safety.');
-        return true;
+    if (!hasValidDeviceIp(currentIP)) {
+        console.warn('⚠️ Device IP unavailable on this device; blocking student access because a valid IP is required before opening the student page.');
+        showAlert('❌ لا يمكن فتح صفحة الطالب لأن عنوان IP للجهاز غير متوفر أو غير صحيح. يجب أن يكون IP صحيحًا قبل الدخول.', 'error');
+        return false;
     }
 
     try {
@@ -914,8 +923,8 @@ async function checkDeviceIPConflict(studentCode, lectureNumber, existingStudent
         });
         if (matchingIPRecord) {
             const lectureRecord = matchingIPRecord;
-            const registeredCode = String(lectureRecord.fields?.Code || lectureRecord.id || '').trim();
-            console.log(`✓ وجد في ${tableName}: Code=${registeredCode}, IP=${currentIP}`);
+            const registeredCode = getStudentCodeFromRecord(lectureRecord);
+            console.log(`✓ وجد في ${tableName}: Code=${registeredCode || lectureRecord.id || 'UNKNOWN'}, IP=${currentIP}`);
             
             if (registeredCode !== String(studentCode)) { // ✅ مقارنة String مع String
                 console.warn(`❌ رفض الفحص الأول: IP مسجل برمز مختلف (${registeredCode} ≠ ${studentCode})`);
@@ -941,7 +950,8 @@ async function checkDeviceIPConflict(studentCode, lectureNumber, existingStudent
         if (studentRecords.length > 0) {
             const studentRecord = studentRecords[0];
             const registeredIP = String(studentRecord.fields?.['Device IP'] || '').trim();
-            console.log(`✓ وجد كود الطالب في ${tableName}: Code=${studentCode}, Device IP=${registeredIP}`);
+            const resolvedCode = getStudentCodeFromRecord(studentRecord) || studentCode;
+            console.log(`✓ وجد كود الطالب في ${tableName}: Code=${resolvedCode}, Device IP=${registeredIP}`);
             
             if (registeredIP && registeredIP !== String(currentIP).trim() && registeredIP !== 'Unknown') {
                 // ❌ الكود نفسه عنده IP مختلف مسجل
@@ -1213,6 +1223,16 @@ function getDeviceFingerprint() {
     }
 }
 
+function getStudentCodeFromRecord(recordOrFields = {}) {
+    const source = recordOrFields && typeof recordOrFields === 'object' && !Array.isArray(recordOrFields)
+        ? (recordOrFields.fields && typeof recordOrFields.fields === 'object' ? recordOrFields.fields : recordOrFields)
+        : {};
+
+    const rawValue = source.Code ?? source.code ?? source['Student Code'] ?? source.studentCode ?? source.StudentCode ?? source.id ?? recordOrFields?.id ?? '';
+    const normalized = String(rawValue || '').trim();
+    return normalized || '';
+}
+
 function getDataHeaders() {
     const fingerprint = getDeviceFingerprint();
     return {
@@ -1294,8 +1314,17 @@ async function findStudent(studentCode, lectureNumber = null) {
             { headers: getDataHeaders() }
         );
 
-        const lectureStudent = response?.data?.records?.[0];
-        if (!lectureStudent) return null;
+        const lectureStudent = response?.data?.records?.[0] || null;
+        if (!lectureStudent) {
+            const fallbackResponse = await apiGet(
+                `/api/data/${encodeURIComponent(tableName)}?documentId=${encodeURIComponent(studentCode)}`,
+                { headers: getDataHeaders() }
+            );
+            if (fallbackResponse?.data?.records?.[0]) {
+                return fallbackResponse.data.records[0];
+            }
+            return null;
+        }
 
         const lectureFields = lectureStudent.fields || {};
         const hasName = getStudentName(lectureFields);
@@ -1328,6 +1357,10 @@ async function findStudent(studentCode, lectureNumber = null) {
  */
 async function saveStudentLoginData(studentCode, lectureNumber, studentName, studentRecord) {
     if (!studentRecord?.id) return false;
+    if (!hasValidDeviceIp(deviceIP)) {
+        console.warn('❌ Refusing to save student login because Device IP is missing or invalid.');
+        return false;
+    }
 
     try {
         const tableName = `LEC_${lectureNumber}`;
@@ -1335,12 +1368,14 @@ async function saveStudentLoginData(studentCode, lectureNumber, studentName, stu
             ? `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`
             : '';
         const region = checkGeographicRegion && typeof checkGeographicRegion === 'function' ? checkGeographicRegion() : 'Unknown';
+        const resolvedCode = getStudentCodeFromRecord(studentRecord) || studentCode;
         await axios.patch(
             `/api/data/${encodeURIComponent(tableName)}`,
             {
                 id: studentRecord.id,
                 fields: {
-                    'Device IP': deviceIP || 'Unknown',
+                    'Code': resolvedCode || 'UNKNOWN',
+                    'Device IP': deviceIP,
                     ...(mapsLink ? { 'Location': mapsLink } : {}),
                     ...(region ? { 'Region': region } : {}),
                     ...(studentName ? { name: studentName } : {})
@@ -1364,6 +1399,11 @@ async function saveStudentLoginData(studentCode, lectureNumber, studentName, stu
  */
 async function updateStudentAttendance(studentCode, lectureNumber, tableName, columnName, existingStudentRecord = null) {
     try {
+        if (!hasValidDeviceIp(deviceIP)) {
+            console.warn('❌ Refusing to update attendance because Device IP is missing or invalid.');
+            return null;
+        }
+
         const response = existingStudentRecord ? null : await apiGet(
             `/api/data/${encodeURIComponent(tableName)}?filterByFormula=({Code}='${studentCode}')`,
             { headers: getDataHeaders() }
@@ -1384,10 +1424,11 @@ async function updateStudentAttendance(studentCode, lectureNumber, tableName, co
             {
                 id: recordId,
                 fields: {
+                    'Code': getStudentCodeFromRecord(studentRecord) || studentCode || 'UNKNOWN',
                     [columnName]: true,
                     'Location': mapsLink,
                     'Region': region,
-                    'Device IP': deviceIP || 'Unknown'
+                    'Device IP': deviceIP
                 }
             },
             { headers: getDataHeaders() }
@@ -1409,6 +1450,10 @@ async function addStudentToLecture(studentCode, lectureNumber, tableName) {
         if (!tableName) {
             tableName = `LEC_${lectureNumber}`;
         }
+        if (!hasValidDeviceIp(deviceIP)) {
+            console.warn('❌ Refusing to add student to lecture because Device IP is missing or invalid.');
+            return null;
+        }
 
         const studentRecord = await findStudent(studentCode);
         if (!studentRecord) return null;
@@ -1423,10 +1468,10 @@ async function addStudentToLecture(studentCode, lectureNumber, tableName) {
                     {
                         fields: {
                             'name': studentName,
-                            'Code': studentCode,
+                            'Code': studentCode || 'UNKNOWN',
                             'Location': `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`,
                             'Region': 'In region',
-                            'Device IP': deviceIP || 'Unknown',
+                            'Device IP': deviceIP,
                             '1st QR': false,
                             '2nd QR': false,
                             '3rd QR': false
@@ -1457,6 +1502,11 @@ async function updateStudentLocation(studentCode, lectureNumber) {
     }
 
     try {
+        if (!hasValidDeviceIp(deviceIP)) {
+            console.warn('❌ Refusing to update student location because Device IP is missing or invalid.');
+            return false;
+        }
+
         const tableName = `LEC_${lectureNumber}`;
         const mapsLink = `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`;
         const response = await apiGet(
@@ -1473,9 +1523,10 @@ async function updateStudentLocation(studentCode, lectureNumber) {
                 {
                     id: recordId,
                     fields: {
+                        'Code': getStudentCodeFromRecord(response.data.records[0]) || studentCode || 'UNKNOWN',
                         'Location': mapsLink,
                         'Region': regionStatus,
-                        'Device IP': deviceIP || 'Unknown'
+                        'Device IP': deviceIP
                     }
                 },
                 { headers: getDataHeaders() }
@@ -1530,13 +1581,13 @@ async function enrichStudentNamesForExport(records) {
     const directoryStudents = await fetchLectureStudents(1);
     const namesByCode = new Map();
     directoryStudents.forEach(record => {
-        const code = String(record.fields?.Code || record.id || '').trim();
+        const code = getStudentCodeFromRecord(record) || String(record.id || '').trim();
         const name = getStudentName(record.fields || {});
         if (code && name) namesByCode.set(code, name);
     });
 
     missingNames.forEach(record => {
-        const code = String(record.fields?.Code || record.id || '').trim();
+        const code = getStudentCodeFromRecord(record) || String(record.id || '').trim();
         const name = namesByCode.get(code);
         if (name) record.fields.Name = name;
     });

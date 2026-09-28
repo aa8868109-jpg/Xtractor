@@ -38,6 +38,20 @@ function normalizeFingerprint(value) {
     return String(value || '').trim().replace(/\s+/g, '').slice(0, 256);
 }
 
+function getStudentCodeCandidates(doc, fallbackCode = '') {
+    const data = doc && typeof doc.data === 'function' ? doc.data() || {} : {};
+    const values = [
+        fallbackCode,
+        data.Code,
+        data.code,
+        data['Student Code'],
+        data.studentCode,
+        data.StudentCode,
+        doc?.id || ''
+    ];
+    return Array.from(new Set(values.filter(value => typeof value === 'string' ? value.trim() : value !== undefined && value !== null && String(value).trim()))).map(String).map(value => value.trim()));
+}
+
 async function findStudentDocument(lectureRef, submittedCode) {
     if (!lectureRef || !submittedCode) return null;
 
@@ -50,13 +64,15 @@ async function findStudentDocument(lectureRef, submittedCode) {
         console.warn('findStudentDocument doc-id lookup failed:', error.message || error);
     }
 
-    try {
-        const byCodeField = await lectureRef.where('Code', '==', submittedCode).limit(1).get();
-        if (!byCodeField.empty) {
-            return byCodeField.docs[0];
+    for (const fieldName of ['Code', 'code', 'Student Code', 'studentCode', 'StudentCode']) {
+        try {
+            const byCodeField = await lectureRef.where(fieldName, '==', submittedCode).limit(1).get();
+            if (!byCodeField.empty) {
+                return byCodeField.docs[0];
+            }
+        } catch (error) {
+            console.warn(`findStudentDocument ${fieldName} lookup failed:`, error.message || error);
         }
-    } catch (error) {
-        console.warn('findStudentDocument Code-field lookup failed:', error.message || error);
     }
 
     return null;
@@ -113,8 +129,19 @@ module.exports = async function handler(req, res) {
         const clientIp = getClientIp(req);
         const incomingFingerprint = normalizeFingerprint(req.body?.deviceFingerprint || req.headers?.['x-device-fingerprint'] || req.headers?.['X-Device-Fingerprint'] || '');
         const studentData = studentDoc.data() || {};
+        const studentCodeFromDoc = getStudentCodeCandidates(studentDoc, submittedCode)[0] || submittedCode;
         const storedIp = String(studentData.Device_ip || studentData['Device IP'] || '').trim();
         const storedFingerprint = normalizeFingerprint(studentData.Device_Fingerprint || studentData.deviceFingerprint || studentData['Device Fingerprint'] || '');
+
+        if (!clientIp || clientIp === 'Unknown' || clientIp === 'unknown' || clientIp === '127.0.0.1' || clientIp === '::1') {
+            logSecurityEvent('student_login_missing_ip', { req, lectureNumber, submittedCode, clientIp });
+            return res.status(401).json({ authenticated: false, reason: 'device_ip_missing' });
+        }
+
+        if (storedIp === 'Unknown' || storedIp === 'unknown') {
+            logSecurityEvent('student_login_stored_unknown_ip', { req, lectureNumber, submittedCode, storedIp });
+            return res.status(401).json({ authenticated: false, reason: 'device_ip_missing' });
+        }
 
         if (storedIp && storedIp !== 'Unknown' && storedIp !== clientIp) {
             logSecurityEvent('student_login_ip_conflict', { req, lectureNumber, submittedCode, storedIp, clientIp });
@@ -124,6 +151,11 @@ module.exports = async function handler(req, res) {
         if (storedFingerprint && incomingFingerprint && storedFingerprint !== incomingFingerprint) {
             logSecurityEvent('student_login_fingerprint_conflict', { req, lectureNumber, submittedCode, storedFingerprint: storedFingerprint.slice(0, 32), incomingFingerprint: incomingFingerprint.slice(0, 32) });
             return res.status(401).json({ authenticated: false, reason: 'device_fingerprint_conflict' });
+        }
+
+        if (!studentCodeFromDoc || studentCodeFromDoc === 'UNKNOWN' || studentCodeFromDoc === 'unknown') {
+            logSecurityEvent('student_login_missing_code', { req, lectureNumber, submittedCode, docId: studentDoc.id });
+            return res.status(401).json({ authenticated: false, reason: 'student_code_missing' });
         }
 
         if (clientIp && clientIp !== 'Unknown' && clientIp !== '127.0.0.1') {
