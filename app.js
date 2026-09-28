@@ -64,9 +64,10 @@ function persistSessionToken(token) {
     }
     try { safeStorage.setItem(SESSION_TOKEN_KEY, token); } catch (e) {}
 }
-// Safe storage wrapper: prefers sessionStorage, then localStorage, then in-memory object
+// Safe storage wrapper: keep the session token in memory or sessionStorage only.
+// The server-side cookie remains the trusted session source; browser storage is only a
+// temporary client-side fallback for the current tab and is never treated as the source of truth.
 const _inMemoryStorage = {};
-let _localStorageAvailable = false;
 let _sessionStorageAvailable = false;
 
 function detectStorageAvailability() {
@@ -80,27 +81,13 @@ function detectStorageAvailability() {
     } catch (e) {
         _sessionStorageAvailable = false;
     }
-
-    try {
-        const testKey = '__xtractor_storage_test__';
-        if (window && window.localStorage) {
-            window.localStorage.setItem(testKey, '1');
-            window.localStorage.removeItem(testKey);
-            _localStorageAvailable = true;
-        }
-    } catch (e) {
-        _localStorageAvailable = false;
-    }
 }
-try { detectStorageAvailability(); } catch (e) { _localStorageAvailable = false; _sessionStorageAvailable = false; }
+try { detectStorageAvailability(); } catch (e) { _sessionStorageAvailable = false; }
 
 const safeStorage = {
     getItem(key) {
         if (_sessionStorageAvailable && window && window.sessionStorage) {
             try { return window.sessionStorage.getItem(key); } catch (e) {}
-        }
-        if (_localStorageAvailable && window && window.localStorage) {
-            try { return window.localStorage.getItem(key); } catch (e) {}
         }
         return _inMemoryStorage[key] ?? null;
     },
@@ -109,39 +96,15 @@ const safeStorage = {
         if (_sessionStorageAvailable && window && window.sessionStorage) {
             try { window.sessionStorage.setItem(key, normalizedValue); return; } catch (e) {}
         }
-        if (_localStorageAvailable && window && window.localStorage) {
-            try { window.localStorage.setItem(key, normalizedValue); return; } catch (e) {}
-        }
         _inMemoryStorage[key] = normalizedValue;
     },
     removeItem(key) {
         if (_sessionStorageAvailable && window && window.sessionStorage) {
             try { window.sessionStorage.removeItem(key); } catch (e) {}
         }
-        if (_localStorageAvailable && window && window.localStorage) {
-            try { window.localStorage.removeItem(key); } catch (e) {}
-        }
         delete _inMemoryStorage[key];
     }
 };
-
-function installLocalStorageShim() {
-    try {
-        if (_localStorageAvailable && _sessionStorageAvailable) return;
-        if (Storage && Storage.prototype && Storage.prototype.__xtractor_shim_installed__) return;
-
-        if (Storage && Storage.prototype) {
-            Storage.prototype.__xtractor_shim_installed__ = true;
-            Storage.prototype.getItem = function(key) { return _inMemoryStorage[key] ?? null; };
-            Storage.prototype.setItem = function(key, value) { _inMemoryStorage[key] = String(value); };
-            Storage.prototype.removeItem = function(key) { delete _inMemoryStorage[key]; };
-            Storage.prototype.key = function(i) { const keys = Object.keys(_inMemoryStorage); return keys[i] || null; };
-            Object.defineProperty(Storage.prototype, 'length', { get: function() { return Object.keys(_inMemoryStorage).length; } });
-        }
-    } catch (e) {}
-}
-
-try { if (!_localStorageAvailable && !_sessionStorageAvailable) installLocalStorageShim(); } catch (e) {}
 
 // ====== API Request Manager (coalescing + backoff) ======
 const _inFlightRequests = new Map();

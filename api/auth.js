@@ -22,10 +22,8 @@ function setSessionCookie(res, token, req = null) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('Vary', 'Origin, Cookie');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader(
-      'Set-Cookie',
-      `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=3600; HttpOnly; ${securityFlags};`
-    );
+    const cookieValue = `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=3600; HttpOnly; ${securityFlags};`;
+    res.setHeader('Set-Cookie', cookieValue);
 }
 
 module.exports = async function handler(req, res) {
