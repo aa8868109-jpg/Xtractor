@@ -1361,6 +1361,7 @@ async function saveStudentLoginData(studentCode, lectureNumber, studentName, stu
                 fields: {
                     'Code': resolvedCode || 'UNKNOWN',
                     'Device IP': deviceIP,
+                    'Device_Fingerprint': getDeviceFingerprint(),
                     ...(mapsLink ? { 'Location': mapsLink } : {}),
                     ...(region ? { 'Region': region } : {}),
                     ...(studentName ? { name: studentName } : {})
@@ -2642,6 +2643,8 @@ async function submitStudentCode() {
                                 ? 'هذا الكود مسجل بعنوان IP مختلف.'
                                 : reason === 'device_fingerprint_conflict'
                                     ? 'هذا الكود مرتبط بجهاز مختلف.'
+                                    : reason === 'device_fingerprint_missing'
+                                        ? 'تعذر التحقق من بصمة الجهاز. يرجى تحديث الصفحة والمحاولة مجددًا.'
                                     : reason === 'shared_device_ip' || reason === 'shared_device_fingerprint'
                                         ? 'هذا الجهاز مرتبط بكود طالب آخر.'
                             : 'فشل تسجيل الدخول. يرجى التحقق من الكود وحالة المحاضرة.';

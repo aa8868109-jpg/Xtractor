@@ -42,6 +42,10 @@ function getStudentCodeFromRecordData(data = {}, fallbackId = '') {
   return String(value || '').trim();
 }
 
+function normalizeFingerprint(value) {
+  return String(value || '').trim().replace(/\s+/g, '').slice(0, 256);
+}
+
 function toRecord(doc, collection = '') {
   const data = doc.data() || {};
   const fields = {};
@@ -232,12 +236,19 @@ module.exports = async function handler(req, res) {
               return res.status(400).json({ error: 'invalid_device_ip' });
             }
 
-            const [deviceIpMatches, legacyIpMatches] = await Promise.all([
-              ref.where('Device_ip', '==', requestedIP).limit(20).get(),
-              ref.where('Device IP', '==', requestedIP).limit(20).get()
+            const incomingFingerprint = normalizeFingerprint(
+              req.headers?.['x-device-fingerprint'] || req.headers?.['X-Device-Fingerprint'] || ''
+            );
+            if (!incomingFingerprint) {
+              return res.status(400).json({ error: 'device_fingerprint_missing' });
+            }
+
+            const [fingerprintMatches, legacyFingerprintMatches] = await Promise.all([
+              ref.where('Device_Fingerprint', '==', incomingFingerprint).limit(20).get(),
+              ref.where('Device Fingerprint', '==', incomingFingerprint).limit(20).get()
             ]);
             const matchingDocs = new Map();
-            for (const doc of [...deviceIpMatches.docs, ...legacyIpMatches.docs]) {
+            for (const doc of [...fingerprintMatches.docs, ...legacyFingerprintMatches.docs]) {
               matchingDocs.set(doc.id, doc);
             }
             const conflict = Array.from(matchingDocs.values()).some(doc => {

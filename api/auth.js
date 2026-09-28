@@ -147,6 +147,11 @@ module.exports = async function handler(req, res) {
             return res.status(401).json({ authenticated: false, reason: 'device_ip_missing' });
         }
 
+        if (!incomingFingerprint) {
+            logSecurityEvent('student_login_missing_fingerprint', { req, lectureNumber, submittedCode });
+            return res.status(401).json({ authenticated: false, reason: 'device_fingerprint_missing' });
+        }
+
         if (storedIp === 'Unknown' || storedIp === 'unknown') {
             logSecurityEvent('student_login_stored_unknown_ip', { req, lectureNumber, submittedCode, storedIp });
             return res.status(401).json({ authenticated: false, reason: 'device_ip_missing' });
@@ -171,25 +176,11 @@ module.exports = async function handler(req, res) {
             return res.status(401).json({ authenticated: false, reason: 'student_code_missing' });
         }
 
-        if (clientIp && clientIp !== 'Unknown' && clientIp !== '127.0.0.1') {
-            const sameIpMatches = await lectureRef.where('Device_ip', '==', clientIp).limit(10).get();
-            if (!sameIpMatches.empty) {
-                const conflictingStudent = sameIpMatches.docs.find(doc => {
-                    const docCode = String(doc.data()?.Code || doc.id || '').trim();
-                    return docCode && docCode !== String(submittedCode).trim();
-                });
-                if (conflictingStudent) {
-                    logSecurityEvent('student_login_shared_ip_detected', { req, lectureNumber, submittedCode, conflictCode: String(conflictingStudent.data()?.Code || conflictingStudent.id || '') });
-                    return res.status(401).json({ authenticated: false, reason: 'shared_device_ip' });
-                }
-            }
-        }
-
         if (incomingFingerprint) {
             const sameFingerprintMatches = await lectureRef.where('Device_Fingerprint', '==', incomingFingerprint).limit(10).get();
             if (!sameFingerprintMatches.empty) {
                 const conflictingStudent = sameFingerprintMatches.docs.find(doc => {
-                    const docCode = String(doc.data()?.Code || doc.id || '').trim();
+                    const docCode = getStudentCodeCandidates(doc)[0] || '';
                     return docCode && docCode !== String(submittedCode).trim();
                 });
                 if (conflictingStudent) {
