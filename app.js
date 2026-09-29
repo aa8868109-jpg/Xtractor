@@ -244,6 +244,9 @@ let studentModePollMs = STUDENT_MODE_POLL_BASE_MS;
 let studentLocation = null;
 let qrScanner = null;
 let liveQrScanned = false;
+let preparationCandidateCache = null;
+let preparationSearchVersion = 0;
+let manualPreparationInProgress = false;
 let isProcessingQR = false; // Prevent concurrent processing
 let deviceIP = null; // Device IP address
 
@@ -1760,6 +1763,13 @@ async function fetchLectureStudents(lectureNumber) {
     }
 }
 
+function invalidateLectureStudentsCache(lectureNumber) {
+    const cacheKey = `lecture:${lectureNumber}`;
+    if (window._lectureStudentsCache) {
+        delete window._lectureStudentsCache[cacheKey];
+    }
+}
+
 async function enrichStudentNamesForExport(records) {
     const missingNames = records.filter(record => !getStudentName(record.fields || {}));
     if (missingNames.length === 0) return;
@@ -2130,6 +2140,19 @@ async function selectLecture() {
 
     currentLectureNumber = lectureNumber;
     lectureSelected = true;
+    preparationCandidateCache = null;
+    preparationSearchVersion++;
+    const preparationCodeInput = document.getElementById('manual-preparation-code');
+    const preparationStudentSelect = document.getElementById('manual-preparation-student');
+    const preparationButton = document.getElementById('manual-preparation-btn');
+    const preparationStatus = document.getElementById('manual-preparation-status');
+    if (preparationCodeInput) preparationCodeInput.value = '';
+    if (preparationStudentSelect) {
+        preparationStudentSelect.replaceChildren(new Option('Search for a student first', ''));
+        preparationStudentSelect.disabled = true;
+    }
+    if (preparationButton) preparationButton.disabled = true;
+    if (preparationStatus) preparationStatus.textContent = 'Enter a student code to search.';
     
     // Save to safeStorage as well
     safeStorage.setItem('selectedLecture', lectureNumber);
@@ -2142,7 +2165,7 @@ async function selectLecture() {
     // Load QR selection status for this lecture
     await updateQRSelectionDisplay();
     
-    showAlert(`✓ Lecture ${lectureNumber} loaded - Select a QR code to enable`, 'success');
+    showAlert(`✓ Lecture ${lectureNumber} loaded. Open the QR page to begin attendance.`, 'success');
     
     // Start updating student list
     startLectureStudentUpdates();
@@ -2327,15 +2350,200 @@ async function updateStudentsList() {
     studentsList.innerHTML = html;
 }
 
+async function loadPreparationCandidates(lectureNumber) {
+    const lectureKey = String(lectureNumber);
+    if (preparationCandidateCache?.lectureKey === lectureKey) {
+        return preparationCandidateCache;
+    }
+
+    const [directoryRecords, lectureRecords] = await Promise.all([
+        fetchLectureStudents(1),
+        lectureKey === '1' ? Promise.resolve(null) : fetchLectureStudents(lectureNumber)
+    ]);
+    const currentRecords = lectureRecords || directoryRecords;
+    const studentsByCode = new Map();
+
+    directoryRecords.forEach(record => {
+        const code = getStudentCodeFromRecord(record) || String(record.id || '').trim();
+        if (code) studentsByCode.set(code, { ...record, fields: { ...(record.fields || {}), Code: code } });
+    });
+    currentRecords.forEach(record => {
+        const code = getStudentCodeFromRecord(record) || String(record.id || '').trim();
+        if (!code) return;
+        const directoryStudent = studentsByCode.get(code);
+        studentsByCode.set(code, {
+            ...(directoryStudent || {}),
+            ...record,
+            fields: { ...(directoryStudent?.fields || {}), ...(record.fields || {}), Code: code }
+        });
+    });
+
+    preparationCandidateCache = {
+        lectureKey,
+        students: Array.from(studentsByCode.values()),
+        lectureRecords: currentRecords
+    };
+    return preparationCandidateCache;
+}
+
+async function searchPreparationStudents() {
+    const input = document.getElementById('manual-preparation-code');
+    const select = document.getElementById('manual-preparation-student');
+    const button = document.getElementById('manual-preparation-btn');
+    const status = document.getElementById('manual-preparation-status');
+    if (!input || !select || !button || !status) return;
+
+    const version = ++preparationSearchVersion;
+    const query = input.value.trim().toLowerCase();
+    select.replaceChildren(new Option(query ? 'Searching students...' : 'Enter a student code first', ''));
+    select.disabled = true;
+    button.disabled = true;
+
+    if (!query) {
+        status.textContent = 'Enter a student code to search.';
+        return;
+    }
+    if (!currentLectureNumber) {
+        status.textContent = 'Select a lecture first.';
+        return;
+    }
+
+    status.textContent = 'Searching students...';
+    try {
+        const candidates = await loadPreparationCandidates(currentLectureNumber);
+        if (version !== preparationSearchVersion) return;
+
+        const matches = candidates.students.filter(record => {
+            const code = getStudentCodeFromRecord(record) || String(record.id || '');
+            return code.toLowerCase().includes(query);
+        });
+
+        if (matches.length === 0) {
+            select.replaceChildren(new Option('No matching students', ''));
+            status.textContent = 'No students match that code in the student directory.';
+            return;
+        }
+
+        matches.forEach(record => {
+            const code = getStudentCodeFromRecord(record) || String(record.id || '').trim();
+            const name = getStudentName(record.fields || {});
+            const option = new Option(name ? `${code} - ${name}` : code, code);
+            select.add(option);
+        });
+        select.disabled = false;
+        status.textContent = `${matches.length} student(s) found. Select one to continue.`;
+    } catch (error) {
+        console.error('Failed to search students for manual attendance:', error);
+        if (version === preparationSearchVersion) {
+            select.replaceChildren(new Option('Search failed', ''));
+            status.textContent = 'Could not search students. Check the connection and try again.';
+        }
+    }
+}
+
+function updatePreparationButtonState() {
+    const select = document.getElementById('manual-preparation-student');
+    const button = document.getElementById('manual-preparation-btn');
+    if (button) button.disabled = manualPreparationInProgress || !select?.value;
+}
+
+async function prepareSelectedStudent() {
+    const select = document.getElementById('manual-preparation-student');
+    const button = document.getElementById('manual-preparation-btn');
+    const status = document.getElementById('manual-preparation-status');
+    const selectedCode = select?.value;
+
+    if (currentMode !== 'doctor') {
+        showAlert('Only the instructor can prepare attendance manually.', 'error');
+        return;
+    }
+    if (!currentLectureNumber || !selectedCode || !preparationCandidateCache) {
+        showAlert('Select a lecture and a student first.', 'warning');
+        return;
+    }
+
+    const selectedStudent = preparationCandidateCache.students.find(record =>
+        (getStudentCodeFromRecord(record) || String(record.id || '').trim()) === selectedCode
+    );
+    if (!selectedStudent) {
+        showAlert('The selected student could not be found. Search again.', 'error');
+        return;
+    }
+
+    const existingLectureRecord = preparationCandidateCache.lectureRecords.find(record =>
+        (getStudentCodeFromRecord(record) || String(record.id || '').trim()) === selectedCode
+    );
+    const studentName = getStudentName(selectedStudent.fields || {});
+    const fields = {
+        Code: selectedCode,
+        Qr_Live: true,
+        ...(studentName ? { name: studentName } : {})
+    };
+
+    manualPreparationInProgress = true;
+    updatePreparationButtonState();
+    if (status) status.textContent = `Preparing ${selectedCode}...`;
+
+    try {
+        const tableName = `LEC_${currentLectureNumber}`;
+        if (existingLectureRecord) {
+            await axios.patch(
+                `/api/data/${encodeURIComponent(tableName)}`,
+                { id: existingLectureRecord.id, fields },
+                { headers: getDataHeaders() }
+            );
+        } else {
+            await axios.post(
+                `/api/data/${encodeURIComponent(tableName)}`,
+                { records: [{ fields }] },
+                { headers: getDataHeaders() }
+            );
+        }
+
+        invalidateLectureStudentsCache(currentLectureNumber);
+        preparationCandidateCache = null;
+        await updateStudentsList();
+        if (status) status.textContent = `Student ${selectedCode} prepared successfully.`;
+        showAlert(`✓ Student ${selectedCode} prepared successfully.`, 'success');
+        await searchPreparationStudents();
+    } catch (error) {
+        console.error('Manual attendance preparation failed:', error);
+        if (status) status.textContent = 'Preparation failed. Check the connection and try again.';
+        showAlert('Could not prepare the selected student.', 'error');
+    } finally {
+        manualPreparationInProgress = false;
+        updatePreparationButtonState();
+    }
+}
+
 /**
  * Toggle all lectures checkbox
  */
 function toggleAllLectures() {
     const allCheckbox = document.getElementById('lec-all');
     const lectureCheckboxes = document.querySelectorAll('.lecture-checkbox');
+    if (!allCheckbox) return;
     lectureCheckboxes.forEach(cb => {
         cb.checked = allCheckbox.checked;
     });
+}
+
+function openMultipleLecturesExportPage() {
+    const doctorPanel = document.getElementById('doctor-panel');
+    const topBar = document.getElementById('top-bar');
+    const exportPage = document.getElementById('multiple-lectures-export-page');
+    if (doctorPanel) doctorPanel.style.display = 'none';
+    if (topBar) topBar.style.display = 'none';
+    if (exportPage) exportPage.style.display = 'block';
+}
+
+function closeMultipleLecturesExportPage() {
+    const doctorPanel = document.getElementById('doctor-panel');
+    const topBar = document.getElementById('top-bar');
+    const exportPage = document.getElementById('multiple-lectures-export-page');
+    if (exportPage) exportPage.style.display = 'none';
+    if (doctorPanel) doctorPanel.style.display = 'block';
+    if (topBar) topBar.style.display = 'block';
 }
 
 /**
@@ -2598,7 +2806,7 @@ async function exportToExcel() {
             excelData.push({
                 'الاسم': getStudentName(fields) || '---',
                 'الكود': fields.Code || record.id || '---',
-                'Live QR': fields.Qr_Live === true || fields.Qr_Live === 'true' ? 'X' : '',
+                'Live QR': fields.Qr_Live === true || fields.Qr_Live === 'true' ? '✓' : '',
                 'المنطقة': fields.Region || '---'
             });
         });
@@ -2614,33 +2822,9 @@ async function exportToExcel() {
         const headers = ['الاسم', 'الكود', 'Live QR', 'المنطقة'];
         worksheet.addRow(headers);
 
-        // Add data rows with Region coloring
-        excelData.forEach((row, rowIndex) => {
-            const newRow = worksheet.addRow([
-                row['الاسم'],
-                row['الكود'],
-                row['المنطقة']
-            ]);
-            
-            // Color the Region cell (column 4) based on value
-            const regionCell = newRow.getCell(4);
-            if (row['المنطقة'] === 'Out region') {
-                // Red background for Out region
-                regionCell.fill = {
-                    type: 'pattern',
-                    pattern: 'solid',
-                    fgColor: { argb: 'FFDC2626' }  // Red
-                };
-                regionCell.font = { color: { argb: 'FFFFFFFF' }, bold: true };  // White text
-            } else if (row['المنطقة'] === 'In region') {
-                // Green background for In region
-                regionCell.fill = {
-                    type: 'pattern',
-                    pattern: 'solid',
-                    fgColor: { argb: 'FF16A34A' }  // Green
-                };
-                regionCell.font = { color: { argb: 'FFFFFFFF' }, bold: true };  // White text
-            }
+        // Add data rows in the same order as the headers.
+        excelData.forEach(row => {
+            worksheet.addRow([row['الاسم'], row['الكود'], row['Live QR'], row['المنطقة']]);
         });
 
         // Set column widths
@@ -2651,6 +2835,24 @@ async function exportToExcel() {
 
         // Apply professional formatting
         applyProfessionalFormatting(worksheet, 1, excelData.length + 1);
+
+        for (let rowNumber = 2; rowNumber <= excelData.length + 1; rowNumber++) {
+            const row = worksheet.getRow(rowNumber);
+            const attendanceCell = row.getCell(3);
+            if (attendanceCell.value === '✓') {
+                attendanceCell.font = { name: 'Segoe UI', size: 12, bold: true, color: { argb: 'FF16803C' } };
+            }
+
+            const regionCell = row.getCell(4);
+            if (regionCell.value === 'Out region' || regionCell.value === 'In region') {
+                regionCell.fill = {
+                    type: 'pattern',
+                    pattern: 'solid',
+                    fgColor: { argb: regionCell.value === 'Out region' ? 'FFDC2626' : 'FF16A34A' }
+                };
+                regionCell.font = { name: 'Segoe UI', size: 10, color: { argb: 'FFFFFFFF' }, bold: true };
+            }
+        }
 
         // Generate file name with timestamp
         const timestamp = new Date().toLocaleString('ar-EG').replace(/[\/:]/g, '-');

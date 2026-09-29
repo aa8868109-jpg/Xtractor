@@ -1353,39 +1353,7 @@
 
                     <!-- Multiple Lectures Export Section -->
                     <div class="section-label">Export Multiple Lectures</div>
-                    <div class="lectures-grid-container">
-                        <div class="lectures-header">
-                            <label class="lecture-checkbox-label lecture-all-checkbox">
-                                <input type="checkbox" id="lec-all" onchange="toggleAllLectures()"> 
-                                <span class="checkbox-text">All Lectures</span>
-                            </label>
-                        </div>
-                        <div class="lectures-grid">
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="1" data-lecture="LEC_1"><span class="checkbox-text">Lec 1</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="2" data-lecture="LEC_2"><span class="checkbox-text">Lec 2</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="3" data-lecture="LEC_3"><span class="checkbox-text">Lec 3</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="4" data-lecture="LEC_4"><span class="checkbox-text">Lec 4</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="5" data-lecture="LEC_5"><span class="checkbox-text">Lec 5</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="6" data-lecture="LEC_6"><span class="checkbox-text">Lec 6</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="7" data-lecture="LEC_7"><span class="checkbox-text">Lec 7</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="8" data-lecture="LEC_8"><span class="checkbox-text">Lec 8</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="9" data-lecture="LEC_9"><span class="checkbox-text">Lec 9</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="10" data-lecture="LEC_10"><span class="checkbox-text">Lec 10</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="11" data-lecture="LEC_11"><span class="checkbox-text">Lec 11</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="12" data-lecture="LEC_12"><span class="checkbox-text">Lec 12</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="13" data-lecture="LEC_13"><span class="checkbox-text">Lec 13</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="14" data-lecture="LEC_14"><span class="checkbox-text">Lec 14</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="15" data-lecture="LEC_15"><span class="checkbox-text">Lec 15</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="16" data-lecture="LEC_16"><span class="checkbox-text">Lec 16</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="17" data-lecture="LEC_17"><span class="checkbox-text">Lec 17</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="18" data-lecture="LEC_18"><span class="checkbox-text">Lec 18</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="19" data-lecture="LEC_19"><span class="checkbox-text">Lec 19</span></label>
-                            <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="20" data-lecture="LEC_20"><span class="checkbox-text">Lec 20</span></label>
-                        </div>
-                        <button onclick="exportMultipleLectures()" class="export-button">
-                            Export Selected Lectures
-                        </button>
-                    </div>
+                    <button type="button" onclick="openMultipleLecturesExportPage()" class="export-button">Export Selected Lectures</button>
 
                     <div class="qr-selection-wrapper">
                         <div class="section-label">Live Attendance QR</div>
@@ -1401,11 +1369,58 @@
                         </div>
                     </div>
 
+                    <div class="qr-selection-wrapper" style="margin-top:18px;">
+                        <div class="section-label">Manual Attendance</div>
+                        <div class="form-group">
+                            <label for="manual-preparation-code">Search by student code</label>
+                            <input type="search" id="manual-preparation-code" inputmode="search" autocomplete="off" placeholder="Enter student code" oninput="searchPreparationStudents()">
+                        </div>
+                        <div class="form-group" style="margin-top:12px;">
+                            <label for="manual-preparation-student">Select student</label>
+                            <select id="manual-preparation-student" onchange="updatePreparationButtonState()" disabled>
+                                <option value="">Search for a student first</option>
+                            </select>
+                        </div>
+                        <button type="button" id="manual-preparation-btn" onclick="prepareSelectedStudent()" disabled style="width:100%; margin-top:14px; background:linear-gradient(135deg, #4ef0b4, #1bc6aa); color:#07141b;">Preparation</button>
+                        <div id="manual-preparation-status" class="mode-status" role="status" aria-live="polite" style="margin-top:12px;">Select a lecture to prepare a student.</div>
+                    </div>
+
                     <!-- Students List -->
                     <div class="section-label">Attendance</div>
                     <div class="students-list" id="students-list">
                         <div class="empty-list">No students registered yet</div>
                     </div>
+                </div>
+            </div>
+
+            <div id="multiple-lectures-export-page" style="display:none;">
+                <div class="section-label">Export Multiple Lectures</div>
+                <div class="lectures-grid-container">
+                    <div class="lectures-header">
+                        <label class="lecture-checkbox-label lecture-all-checkbox">
+                            <input type="checkbox" id="lec-all" onchange="toggleAllLectures()">
+                            <span class="checkbox-text">All Lectures</span>
+                        </label>
+                    </div>
+                    <div class="lectures-grid">
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="1" data-lecture="LEC_1"><span class="checkbox-text">Lec 1</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="2" data-lecture="LEC_2"><span class="checkbox-text">Lec 2</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="3" data-lecture="LEC_3"><span class="checkbox-text">Lec 3</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="4" data-lecture="LEC_4"><span class="checkbox-text">Lec 4</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="5" data-lecture="LEC_5"><span class="checkbox-text">Lec 5</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="6" data-lecture="LEC_6"><span class="checkbox-text">Lec 6</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="7" data-lecture="LEC_7"><span class="checkbox-text">Lec 7</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="8" data-lecture="LEC_8"><span class="checkbox-text">Lec 8</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="9" data-lecture="LEC_9"><span class="checkbox-text">Lec 9</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="10" data-lecture="LEC_10"><span class="checkbox-text">Lec 10</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="11" data-lecture="LEC_11"><span class="checkbox-text">Lec 11</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="12" data-lecture="LEC_12"><span class="checkbox-text">Lec 12</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="13" data-lecture="LEC_13"><span class="checkbox-text">Lec 13</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="14" data-lecture="LEC_14"><span class="checkbox-text">Lec 14</span></label>
+                        <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="15" data-lecture="LEC_15"><span class="checkbox-text">Lec 15</span></label>
+                    </div>
+                    <button type="button" onclick="exportMultipleLectures()" class="export-button">Export</button>
+                    <button type="button" onclick="closeMultipleLecturesExportPage()" class="btn-secondary" style="width:100%; margin-top:10px;">Back to Doctor Page</button>
                 </div>
             </div>
 
