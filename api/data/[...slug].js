@@ -51,9 +51,7 @@ function toRecord(doc, collection = '') {
   const fields = {};
   for (const [key, value] of Object.entries(data)) {
     const canonicalKey = canonicalizeNameKey(key);
-    if (key === 'qr_1') fields['1st QR'] = value;
-    else if (key === 'qr_2') fields['2nd QR'] = value;
-    else if (key === 'qr_3') fields['3rd QR'] = value;
+    if (key === 'Qr_Live') fields.Qr_Live = value;
     else if (key === 'Device_ip') fields['Device IP'] = value;
     else if (canonicalKey === 'name') {
       if (!fields.name || !String(fields.name).trim()) fields.name = value;
@@ -121,9 +119,7 @@ function toFirestore(fields) {
       result.name = String(value).trim();
       continue;
     }
-    if (key === '1st QR' || key === '1st_QR') result.qr_1 = value;
-    else if (key === '2nd QR' || key === '2nd_QR') result.qr_2 = value;
-    else if (key === '3rd QR' || key === '3rd_QR') result.qr_3 = value;
+    if (key === 'Qr_Live') result.Qr_Live = value;
     else if (key === 'Device IP' || key === 'Device_IP') result.Device_ip = value;
     else if (key === 'Code' || key === 'code') {
       result.Code = value;

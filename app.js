@@ -243,11 +243,7 @@ const STUDENT_MODE_POLL_BASE_MS = 10000; // 10s base poll interval
 let studentModePollMs = STUDENT_MODE_POLL_BASE_MS;
 let studentLocation = null;
 let qrScanner = null;
-let scannedQRs = {
-    qr1: false,
-    qr2: false,
-    qr3: false
-};
+let liveQrScanned = false;
 let isProcessingQR = false; // Prevent concurrent processing
 let deviceIP = null; // Device IP address
 
@@ -1284,7 +1280,7 @@ async function showStudentInterface() {
     
     // 📖 قراءة الأكواد المحفوظة من Firestore وتحديث العلامات
     const tableName = `LEC_${currentLectureNumber}`;
-    await loadStudentScannedQRs(currentStudentCode, currentLectureNumber, tableName, currentStudentRecord);
+    await loadStudentLiveQrStatus(currentStudentCode, currentLectureNumber, tableName, currentStudentRecord);
     
     // 🎯 بدء مراقبة Student Mode (للتحقق من الإيقاف من قبل المحاضر)
     startStudentModeMonitoring();
@@ -1353,7 +1349,7 @@ async function exitMode() {
         lectureStudentsTimer = null;
     }
     // currentLectureNumber and lectureSelected remain saved in localStorage
-    scannedQRs = { qr1: false, qr2: false, qr3: false };
+    liveQrScanned = false;
     isProcessingQR = false; // Reset processing flag
     
     // Reset interface
@@ -1376,11 +1372,9 @@ async function exitMode() {
  * Reset all QR Checkboxes
  */
 function resetQRCheckboxes() {
-    Object.keys(scannedQRs).forEach(qr => {
-        scannedQRs[qr] = false;
-        const checkbox = document.getElementById(`${qr}-check`);
-        if (checkbox) checkbox.classList.remove('checked');
-    });
+    liveQrScanned = false;
+    const checkbox = document.getElementById('live-qr-check');
+    if (checkbox) checkbox.classList.remove('checked');
 }
 
 // ====== Shared API Helpers ======
@@ -1666,9 +1660,7 @@ async function addStudentToLecture(studentCode, lectureNumber, tableName) {
                             'Location': `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`,
                             'Region': 'In region',
                             'Device IP': deviceIP,
-                            '1st QR': false,
-                            '2nd QR': false,
-                            '3rd QR': false
+                            'Qr_Live': false
                         }
                     }
                 ]
@@ -1792,10 +1784,10 @@ async function enrichStudentNamesForExport(records) {
 /**
  * Read the student's stored QR progress from the current lecture table.
  */
-async function loadStudentScannedQRs(studentCode, lectureNumber, tableName, existingStudentRecord = null) {
+async function loadStudentLiveQrStatus(studentCode, lectureNumber, tableName, existingStudentRecord = null) {
     try {
-        console.log(`📖 جاري قراءة الأكواد المحفوظة للطالب ${studentCode}...`);
-        scannedQRs = { qr1: false, qr2: false, qr3: false };
+        console.log(`📖 جاري قراءة حالة QR للطالب ${studentCode}...`);
+        liveQrScanned = false;
         updateQRCheckmarks();
 
         const response = existingStudentRecord ? null : await apiGet(
@@ -1812,11 +1804,9 @@ async function loadStudentScannedQRs(studentCode, lectureNumber, tableName, exis
         const fields = studentRecord.fields || {};
         const isRecorded = value => value === true || value === 'true' || value === 1 || value === '1';
 
-        scannedQRs.qr1 = isRecorded(fields['1st QR'] ?? fields['1st_QR'] ?? fields.qr_1);
-        scannedQRs.qr2 = false;
-        scannedQRs.qr3 = false;
+        liveQrScanned = isRecorded(fields.Qr_Live);
 
-        console.log('✓ تم قراءة الأكواس المحفوظة:', scannedQRs);
+        console.log('✓ تم قراءة حالة QR:', liveQrScanned);
         updateQRCheckmarks();
     } catch (error) {
         console.error('❌ خطأ في قراءة البيانات المحفوظة:', error);
@@ -1824,40 +1814,11 @@ async function loadStudentScannedQRs(studentCode, lectureNumber, tableName, exis
 }
 
 /**
- * تحديث العلامات الثلاث على الواجهة
+ * Update the live QR attendance indicator.
  */
 function updateQRCheckmarks() {
-    // تحديث qr1
-    const checkbox1 = document.getElementById('qr1-check');
-    if (checkbox1) {
-        if (scannedQRs.qr1) {
-            checkbox1.classList.add('checked');
-        } else {
-            checkbox1.classList.remove('checked');
-        }
-    }
-
-    // تحديث qr2
-    const checkbox2 = document.getElementById('qr2-check');
-    if (checkbox2) {
-        if (scannedQRs.qr2) {
-            checkbox2.classList.add('checked');
-        } else {
-            checkbox2.classList.remove('checked');
-        }
-    }
-
-    // تحديث qr3
-    const checkbox3 = document.getElementById('qr3-check');
-    if (checkbox3) {
-        if (scannedQRs.qr3) {
-            checkbox3.classList.add('checked');
-        } else {
-            checkbox3.classList.remove('checked');
-        }
-    }
-
-    console.log('✓ تم تحديث العلامات على الواجهة');
+    const checkbox = document.getElementById('live-qr-check');
+    if (checkbox) checkbox.classList.toggle('checked', liveQrScanned);
 }
 
 /**
@@ -2086,7 +2047,7 @@ async function onQRScanned(decodedText) {
         return;
     }
 
-    if (!scannedQRs.qr1) {
+    if (!liveQrScanned) {
         isProcessingQR = true;
 
         if (currentMode === 'student' && currentLectureNumber && currentStudentCode) {
@@ -2095,13 +2056,13 @@ async function onQRScanned(decodedText) {
                 currentStudentCode,
                 currentLectureNumber,
                 tableName,
-                '1st QR',
+                'Qr_Live',
                 currentStudentRecord
             );
 
             if (updateResult) {
-                scannedQRs.qr1 = true;
-                const checkbox = document.getElementById('qr1-check');
+                liveQrScanned = true;
+                const checkbox = document.getElementById('live-qr-check');
                 if (checkbox) checkbox.classList.add('checked');
 
                 if (statusEl) {
@@ -2311,7 +2272,7 @@ async function updateStudentsList() {
     // Filter students - show only those with at least one QR code true
     const attendedStudents = students.filter(record => {
         const student = record.fields || {};
-        const hasLiveQR = isRecorded(student['1st QR'] ?? student['1st_QR'] ?? student.qr_1);
+        const hasLiveQR = isRecorded(student.Qr_Live);
         return hasLiveQR;
     });
 
@@ -2341,11 +2302,11 @@ async function updateStudentsList() {
         const safeStudentCode = escapeHtml(studentCode);
 
         // Count scanned QR codes
-        const qr1Scanned = student['1st QR'] === true || student['1st QR'] === 'true';
+        const qrScanned = isRecorded(student.Qr_Live);
         const qrStatus = '(1/1 Live QR)';
         const qrIndicators = `
             <span class="student-qr-indicators" aria-label="Scanned QR codes">
-                <span class="student-qr-dot ${qr1Scanned ? 'scanned' : ''}" title="Live QR">L</span>
+                <span class="student-qr-dot ${qrScanned ? 'scanned' : ''}" title="Live QR">L</span>
             </span>`;
 
         // Check if student is out of region
@@ -2479,12 +2440,7 @@ async function exportMultipleLectures() {
                 const name = getStudentName(fields) || '---';
                 const region = fields.Region || 'Unknown';
                 
-                // Count QR codes scanned
-                const qrCount = [fields['1st QR'], fields['2nd QR'], fields['3rd QR']]
-                    .filter(value => value === true || value === 'true').length;
-                
-                // Mark as attended only if 2 or more QRs were scanned
-                const hasAttendance = qrCount >= 2;
+                const hasAttendance = fields.Qr_Live === true || fields.Qr_Live === 'true';
                 
                 if (!studentsMap.has(code)) {
                     studentsMap.set(code, {
@@ -2495,7 +2451,6 @@ async function exportMultipleLectures() {
                     });
                 }
                 
-                // Mark attendance for this lecture (X if 2+ QRs, empty if less)
                 studentsMap.get(code).attendance[`Lec ${lec.lecNum}`] = hasAttendance ? 'X' : '';
                 // Store region data for this lecture
                 studentsMap.get(code).regionData[`Lec ${lec.lecNum}`] = region;
@@ -2643,9 +2598,7 @@ async function exportToExcel() {
             excelData.push({
                 'الاسم': getStudentName(fields) || '---',
                 'الكود': fields.Code || record.id || '---',
-                '1st QR': fields['1st QR'] === true || fields['1st QR'] === 'true' ? 'X' : '',
-                '2nd QR': fields['2nd QR'] === true || fields['2nd QR'] === 'true' ? 'X' : '',
-                '3rd QR': fields['3rd QR'] === true || fields['3rd QR'] === 'true' ? 'X' : '',
+                'Live QR': fields.Qr_Live === true || fields.Qr_Live === 'true' ? 'X' : '',
                 'المنطقة': fields.Region || '---'
             });
         });
@@ -2658,7 +2611,7 @@ async function exportToExcel() {
         const worksheet = workbook.addWorksheet(`Lecture_${currentLectureNumber}`);
 
         // Add header row
-        const headers = ['الاسم', 'الكود', '1st QR', '2nd QR', '3rd QR', 'المنطقة'];
+        const headers = ['الاسم', 'الكود', 'Live QR', 'المنطقة'];
         worksheet.addRow(headers);
 
         // Add data rows with Region coloring
@@ -2666,14 +2619,11 @@ async function exportToExcel() {
             const newRow = worksheet.addRow([
                 row['الاسم'],
                 row['الكود'],
-                row['1st QR'],
-                row['2nd QR'],
-                row['3rd QR'],
                 row['المنطقة']
             ]);
             
-            // Color the Region cell (column 6) based on value
-            const regionCell = newRow.getCell(6);
+            // Color the Region cell (column 4) based on value
+            const regionCell = newRow.getCell(4);
             if (row['المنطقة'] === 'Out region') {
                 // Red background for Out region
                 regionCell.fill = {
@@ -2696,10 +2646,8 @@ async function exportToExcel() {
         // Set column widths
         worksheet.getColumn(1).width = 35;  // Name
         worksheet.getColumn(2).width = 10;  // Code
-        worksheet.getColumn(3).width = 9;  // 1st QR
-        worksheet.getColumn(4).width = 9;  // 2nd QR
-        worksheet.getColumn(5).width = 9;  // 3rd QR
-        worksheet.getColumn(6).width = 10;  // Region
+        worksheet.getColumn(3).width = 12;  // Live QR
+        worksheet.getColumn(4).width = 16;  // Region
 
         // Apply professional formatting
         applyProfessionalFormatting(worksheet, 1, excelData.length + 1);
