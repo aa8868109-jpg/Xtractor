@@ -4,6 +4,7 @@ const { SESSION_COOKIE_NAME, createSessionToken } = require('./session');
 const { logSecurityEvent } = require('./security-logger');
 const { checkRateLimit } = require('./rate-limit');
 const { enforceSameOrigin } = require('./request-security');
+const { shouldEnforceFingerprintUniqueness } = require('./device-policy');
 
 function safeEqual(left, right) {
     const leftBuffer = Buffer.from(String(left || ''));
@@ -154,6 +155,11 @@ module.exports = async function handler(req, res) {
         const storedIp = String(studentData.Device_ip || studentData['Device IP'] || '').trim();
         const storedFingerprint = normalizeFingerprint(studentData.Device_Fingerprint || studentData.deviceFingerprint || studentData['Device Fingerprint'] || '');
         const allowLegacyIpMigration = Boolean(storedIp && storedIp !== clientIp && isPrivateIpv4(storedIp));
+        const enforceFingerprintUniqueness = shouldEnforceFingerprintUniqueness({
+            storedIp,
+            currentIp: clientIp,
+            allowLegacyIpMigration
+        });
 
         if (!clientIp || clientIp === 'Unknown' || clientIp === 'unknown' || clientIp === '127.0.0.1' || clientIp === '::1') {
             logSecurityEvent('student_login_missing_ip', { req, lectureNumber, clientIp });
@@ -179,7 +185,7 @@ module.exports = async function handler(req, res) {
             logSecurityEvent('student_login_legacy_ip_migration', { req, lectureNumber });
         }
 
-        if (storedFingerprint && incomingFingerprint && storedFingerprint !== incomingFingerprint) {
+        if (enforceFingerprintUniqueness && storedFingerprint && incomingFingerprint && storedFingerprint !== incomingFingerprint) {
             logSecurityEvent('student_login_fingerprint_conflict', { req, lectureNumber });
             return res.status(401).json({ authenticated: false, reason: 'device_fingerprint_conflict' });
         }
@@ -189,7 +195,7 @@ module.exports = async function handler(req, res) {
             return res.status(401).json({ authenticated: false, reason: 'student_code_missing' });
         }
 
-        if (incomingFingerprint) {
+        if (incomingFingerprint && enforceFingerprintUniqueness) {
             const sameFingerprintMatches = await lectureRef.where('Device_Fingerprint', '==', incomingFingerprint).limit(10).get();
             if (!sameFingerprintMatches.empty) {
                 const conflictingStudent = sameFingerprintMatches.docs.find(doc => {

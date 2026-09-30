@@ -291,6 +291,11 @@ module.exports = async function handler(req, res) {
               return res.status(400).json({ error: 'invalid_device_ip' });
             }
 
+            const storedDeviceIp = String(myRecord.data()?.Device_ip || myRecord.data()?.['Device IP'] || '').trim();
+            if (storedDeviceIp && storedDeviceIp === requestedIP) {
+              return res.json({ conflict: false });
+            }
+
             const incomingFingerprint = normalizeFingerprint(
               req.headers?.['x-device-fingerprint'] || req.headers?.['X-Device-Fingerprint'] || ''
             );

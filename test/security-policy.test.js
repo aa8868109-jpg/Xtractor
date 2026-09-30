@@ -4,6 +4,7 @@ const test = require('node:test');
 const path = require('node:path');
 const { enforceSameOrigin } = require('../api/request-security');
 const { validateStudentPatch } = require('../api/data-policy');
+const { shouldEnforceFingerprintUniqueness } = require('../api/device-policy');
 
 const workspaceRoot = path.join(__dirname, '..');
 
@@ -82,4 +83,10 @@ test('CSP disallows dynamic and inline scripts and HTML has no inline handlers',
   assert.doesNotMatch(csp, /script-src[^;]*unsafe-inline/);
   assert.doesNotMatch(html, /\son(?:click|input|change|submit)\s*=/i);
   assert.doesNotMatch(html, /<script\s*>/i);
+});
+
+test('an established same-IP student binding tolerates browser fingerprint collisions', () => {
+  assert.equal(shouldEnforceFingerprintUniqueness({ storedIp: '203.0.113.7', currentIp: '203.0.113.7' }), false);
+  assert.equal(shouldEnforceFingerprintUniqueness({ storedIp: '203.0.113.7', currentIp: '203.0.113.8' }), true);
+  assert.equal(shouldEnforceFingerprintUniqueness({ storedIp: '10.0.0.4', currentIp: '203.0.113.8', allowLegacyIpMigration: true }), false);
 });
