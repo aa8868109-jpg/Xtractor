@@ -2289,7 +2289,9 @@ async function updateStudentsList() {
     if (!currentLectureNumber) return;
     
     const students = await fetchLectureStudents(currentLectureNumber);
-    const studentsList = document.getElementById('students-list');
+    const studentsList = document.getElementById('attended-students-view');
+    const countEl = document.getElementById('attended-student-count');
+    if (!studentsList) return;
     const isRecorded = value => value === true || value === 'true' || value === 1 || value === '1';
     
     // Filter students - show only those with at least one QR code true
@@ -2310,9 +2312,12 @@ async function updateStudentsList() {
     }));
     
     if (attendedStudents.length === 0) {
-        studentsList.innerHTML = '<div class="empty-list">No students have scanned QR codes yet</div>';
+        studentsList.innerHTML = '<div class="empty-list">No students have scanned the live QR yet</div>';
+        if (countEl) countEl.textContent = '0 students attended';
         return;
     }
+
+    if (countEl) countEl.textContent = `${attendedStudents.length} student(s) attended`;
 
     let html = '';
     attendedStudents.forEach(record => {
@@ -2348,6 +2353,30 @@ async function updateStudentsList() {
     });
     
     studentsList.innerHTML = html;
+}
+
+async function openAttendanceView() {
+    const doctorPanel = document.getElementById('doctor-panel');
+    const topBar = document.getElementById('top-bar');
+    const attendancePage = document.getElementById('attendance-view-page');
+    if (doctorPanel) doctorPanel.style.display = 'none';
+    if (topBar) topBar.style.display = 'none';
+    if (attendancePage) attendancePage.style.display = 'block';
+    await updateStudentsList();
+}
+
+async function refreshAttendanceView() {
+    invalidateLectureStudentsCache(currentLectureNumber);
+    await updateStudentsList();
+}
+
+function closeAttendanceView() {
+    const attendancePage = document.getElementById('attendance-view-page');
+    const doctorPanel = document.getElementById('doctor-panel');
+    const topBar = document.getElementById('top-bar');
+    if (attendancePage) attendancePage.style.display = 'none';
+    if (doctorPanel) doctorPanel.style.display = 'block';
+    if (topBar) topBar.style.display = 'block';
 }
 
 async function loadPreparationCandidates(lectureNumber) {

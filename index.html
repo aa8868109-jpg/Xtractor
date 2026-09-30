@@ -1387,9 +1387,19 @@
 
                     <!-- Students List -->
                     <div class="section-label">Attendance</div>
-                    <div class="students-list" id="students-list">
-                        <div class="empty-list">No students registered yet</div>
-                    </div>
+                    <button type="button" onclick="openAttendanceView()" class="export-button">View</button>
+                </div>
+            </div>
+
+            <div id="attendance-view-page" style="display:none;">
+                <div class="section-label">Attendance</div>
+                <div class="mode-status" id="attended-student-count" aria-live="polite">Loading attendance...</div>
+                <div class="students-list" id="attended-students-view">
+                    <div class="empty-list">No students have scanned the live QR yet</div>
+                </div>
+                <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap;">
+                    <button type="button" onclick="refreshAttendanceView()" class="btn-secondary" style="flex:1; min-width:140px;">Refresh</button>
+                    <button type="button" onclick="closeAttendanceView()" class="btn-secondary" style="flex:1; min-width:140px;">Back to Doctor Page</button>
                 </div>
             </div>
 
