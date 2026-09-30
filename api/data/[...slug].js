@@ -369,7 +369,10 @@ module.exports = async function handler(req, res) {
         }
 
         const updates = {};
-        if (fields.Qr_Live === true) updates.Qr_Live = true;
+        if (fields.Qr_Live === true) {
+          updates.Qr_Live = true;
+          updates.Qr_Live_Source = 'student';
+        }
         if (fields.Location !== undefined) {
           const location = resolveStudentLocation(fields.Location);
           if (!location) return res.status(400).json({ error: 'student_invalid_location' });

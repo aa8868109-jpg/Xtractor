@@ -2242,12 +2242,7 @@ async function updateStudentsList() {
         const safeStudentCode = escapeHtml(studentCode);
 
         // Count scanned QR codes
-        const qrScanned = isRecorded(student.Qr_Live);
-        const qrStatus = '(1/1 Live QR)';
-        const qrIndicators = `
-            <span class="student-qr-indicators" aria-label="Scanned QR codes">
-                <span class="student-qr-dot ${qrScanned ? 'scanned' : ''}" title="Live QR">L</span>
-            </span>`;
+        const attendanceMethod = student['Qr Live Source'] === 'doctor' ? 'BY DR' : 'LIVE QR';
 
         // Check if student is out of region
         const isOutRegion = region === 'Out region';
@@ -2256,10 +2251,10 @@ async function updateStudentsList() {
         html += `
             <div class="student-item ${isOutRegion ? 'out-of-region' : ''}">
                 <div class="student-info">
-                    <div class="student-name">${safeStudentName} ${locationIndicator} ${qrIndicators}</div>
+                    <div class="student-name">${safeStudentName} ${locationIndicator}</div>
                     <div class="student-code">Code: ${safeStudentCode}</div>
                 </div>
-                <div class="student-status">✓ ${qrStatus}</div>
+                <div class="student-status">${attendanceMethod}</div>
             </div>
         `;
     });
@@ -2418,6 +2413,7 @@ async function prepareSelectedStudent() {
     const fields = {
         Code: selectedCode,
         Qr_Live: true,
+        Qr_Live_Source: 'doctor',
         ...(studentName ? { name: studentName } : {})
     };
 
