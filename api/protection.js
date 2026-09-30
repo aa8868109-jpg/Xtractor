@@ -1,6 +1,6 @@
-const { getFirestore } = require('./firebase');
-const { checkRateLimit } = require('./rate-limit');
-const { enforceSameOrigin } = require('./request-security');
+const { getFirestore } = require('../lib/firebase');
+const { checkRateLimit } = require('../lib/rate-limit');
+const { enforceSameOrigin } = require('../lib/request-security');
 
 // Simple in-memory cache — per-instance, short TTL
 const CACHE_TTL_MS = 30 * 1000;

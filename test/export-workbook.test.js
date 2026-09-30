@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const ExcelJS = require('exceljs');
-const { createMultipleLecturesWorkbook, createSingleLectureWorkbook } = require('../api/export-workbook');
+const { createMultipleLecturesWorkbook, createSingleLectureWorkbook } = require('../lib/export-workbook');
 
 test('single lecture export preserves Live QR marker and region cell colors', async () => {
   const buffer = await createSingleLectureWorkbook([

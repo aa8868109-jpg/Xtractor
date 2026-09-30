@@ -2,9 +2,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const test = require('node:test');
 const path = require('node:path');
-const { enforceSameOrigin } = require('../api/request-security');
-const { validateStudentPatch } = require('../api/data-policy');
-const { shouldEnforceFingerprintUniqueness } = require('../api/device-policy');
+const { enforceSameOrigin } = require('../lib/request-security');
+const { validateStudentPatch } = require('../lib/data-policy');
+const { shouldEnforceFingerprintUniqueness } = require('../lib/device-policy');
 
 const workspaceRoot = path.join(__dirname, '..');
 

@@ -1,8 +1,8 @@
-const { getFirestore } = require('./firebase');
-const { validateSessionToken } = require('./session');
-const { checkRateLimit } = require('./rate-limit');
-const { enforceSameOrigin } = require('./request-security');
-const { createMultipleLecturesWorkbook, createSingleLectureWorkbook } = require('./export-workbook');
+const { getFirestore } = require('../lib/firebase');
+const { validateSessionToken } = require('../lib/session');
+const { checkRateLimit } = require('../lib/rate-limit');
+const { enforceSameOrigin } = require('../lib/request-security');
+const { createMultipleLecturesWorkbook, createSingleLectureWorkbook } = require('../lib/export-workbook');
 
 function getStudentCode(record) {
   return String(record.Code ?? record.code ?? record['Student Code'] ?? record.studentCode ?? record.StudentCode ?? '').trim();

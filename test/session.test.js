@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createSessionToken, validateSessionToken } = require('../api/session');
+const { createSessionToken, validateSessionToken } = require('../lib/session');
 
 test('validates session tokens from cookies and bearer headers', () => {
   const token = createSessionToken({ role: 'doctor' });

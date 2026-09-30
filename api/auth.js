@@ -1,10 +1,10 @@
 const crypto = require('crypto');
-const { getFirestore } = require('./firebase');
-const { SESSION_COOKIE_NAME, createSessionToken } = require('./session');
-const { logSecurityEvent } = require('./security-logger');
-const { checkRateLimit } = require('./rate-limit');
-const { enforceSameOrigin } = require('./request-security');
-const { shouldEnforceFingerprintUniqueness } = require('./device-policy');
+const { getFirestore } = require('../lib/firebase');
+const { SESSION_COOKIE_NAME, createSessionToken } = require('../lib/session');
+const { logSecurityEvent } = require('../lib/security-logger');
+const { checkRateLimit } = require('../lib/rate-limit');
+const { enforceSameOrigin } = require('../lib/request-security');
+const { shouldEnforceFingerprintUniqueness } = require('../lib/device-policy');
 
 function safeEqual(left, right) {
     const leftBuffer = Buffer.from(String(left || ''));

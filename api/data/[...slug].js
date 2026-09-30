@@ -1,9 +1,9 @@
-const { getFirestore } = require('../firebase');
-const { validateSessionToken } = require('../session');
+const { getFirestore } = require('../../lib/firebase');
+const { validateSessionToken } = require('../../lib/session');
 const { isIP } = require('net');
-const { checkRateLimit } = require('../rate-limit');
-const { enforceSameOrigin } = require('../request-security');
-const { validateStudentPatch } = require('../data-policy');
+const { checkRateLimit } = require('../../lib/rate-limit');
+const { enforceSameOrigin } = require('../../lib/request-security');
+const { validateStudentPatch } = require('../../lib/data-policy');
 
 function requireSession(req, res) {
   const session = validateSessionToken(req);

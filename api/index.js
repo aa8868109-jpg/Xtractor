@@ -2,7 +2,7 @@ const protectionHandler = require('./protection');
 const dataHandler = require('./data/[...slug]');
 const authHandler = require('./auth');
 const exportHandler = require('./export');
-const { enforceSameOrigin } = require('./request-security');
+const { enforceSameOrigin } = require('../lib/request-security');
 
 function parseFormData(raw) {
   const result = {};
