@@ -3,13 +3,19 @@
   "version": "1.0.0",
   "description": "Xtractor Vercel app backed by Firestore",
   "scripts": {
-    "check": "node --check app.js && node --check api/index.js && node --check api/auth.js && node --check api/firebase.js && node --check api/protection.js && node --check api/rate-limit.js && node --check api/security-logger.js && node --check api/session.js && node --check api/request-security.js && node --check api/data-policy.js && node --check api/device-policy.js && node --check \"api/data/[...slug].js\"",
+    "check": "node --check app.js && node --check api/index.js && node --check api/auth.js && node --check api/export.js && node --check api/export-workbook.js && node --check api/firebase.js && node --check api/protection.js && node --check api/rate-limit.js && node --check api/security-logger.js && node --check api/session.js && node --check api/request-security.js && node --check api/data-policy.js && node --check api/device-policy.js && node --check \"api/data/[...slug].js\"",
     "test": "node --test"
   },
   "dependencies": {
+    "exceljs": "^4.4.0",
     "firebase-admin": "^14.5.0"
   },
   "devDependencies": {
     "terser": "^5.51.2"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
   }
 }

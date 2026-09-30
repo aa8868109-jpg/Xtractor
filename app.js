@@ -2488,232 +2488,69 @@ function closeMultipleLecturesExportPage() {
 }
 
 /**
- * Apply professional formatting to worksheet
+ * Export selected lectures through the authenticated server endpoint.
  */
-/**
- * Apply professional formatting to Excel worksheet
- * Uses ExcelJS for proper table and formatting support
- */
-function applyProfessionalFormatting(worksheet, startRow = 1, endRow = 1) {
-    // Header styling
-    const headerFill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FF4472C4' }  // Blue
-    };
+async function exportMultipleLectures() {
+    const selectedNumbers = Array.from(document.querySelectorAll('.lecture-checkbox:checked'))
+        .map(checkbox => Number(checkbox.value))
+        .filter(Number.isInteger)
+        .sort((left, right) => left - right);
+    if (selectedNumbers.length === 0) {
+        showAlert('⚠️ يرجى اختيار محاضرة واحدة على الأقل', 'warning');
+        return;
+    }
 
-    const headerFont = {
-        bold: true,
-        name: 'Segoe UI',
-        size: 11,
-        color: { argb: 'FFFFFFFF' }  // White
-    };
-
-    const headerAlignment = {
-        horizontal: 'center',
-        vertical: 'center',
-        wrapText: false
-    };
-
-    // Data styling
-    const dataFont = {
-        name: 'Segoe UI',
-        size: 10,
-        color: { argb: 'FF000000' }  // Black
-    };
-
-    const dataAlignment = {
-        horizontal: 'center',
-        vertical: 'center',
-        wrapText: false
-    };
-
-    const borderAll = {
-        top: { style: 'thin', color: { argb: 'FF000000' } },
-        bottom: { style: 'thin', color: { argb: 'FF000000' } },
-        left: { style: 'thin', color: { argb: 'FF000000' } },
-        right: { style: 'thin', color: { argb: 'FF000000' } }
-    };
-
-    // Apply header formatting
-    const headerRow = worksheet.getRow(1);
-    headerRow.eachCell((cell) => {
-        cell.fill = headerFill;
-        cell.font = headerFont;
-        cell.alignment = headerAlignment;
-        cell.border = borderAll;
-    });
-
-    // Apply data formatting
-    for (let rowNum = 2; rowNum <= endRow; rowNum++) {
-        const row = worksheet.getRow(rowNum);
-        row.eachCell((cell) => {
-            cell.font = dataFont;
-            cell.alignment = dataAlignment;
-            cell.border = borderAll;
-        });
+    try {
+        await downloadAttendanceExport('multiple', selectedNumbers);
+        showAlert(`✓ تم تصدير المحاضرات المحددة (${selectedNumbers.length}) بنجاح.`, 'success');
+    } catch (error) {
+        console.error('❌ Error exporting multiple lectures:', error);
+        showAlert(error.message || '❌ حدث خطأ أثناء التصدير', 'error');
     }
 }
 
-/**
- * Export multiple lectures data to Excel with proper tables
- */
-async function exportMultipleLectures() {
+async function downloadAttendanceExport(kind, lectureNumbers) {
+    let response;
     try {
-        // Get selected lectures
-        const selectedCheckboxes = document.querySelectorAll('.lecture-checkbox:checked');
-        if (selectedCheckboxes.length === 0) {
-            showAlert('⚠️ يرجى اختيار محاضرة واحدة على الأقل', 'warning');
-            return;
-        }
-
-        await loadScriptOnce('/vendor/exceljs.min.js', 'ExcelJS');
-        showAlert('📊 جاري تصدير البيانات من المحاضرات المختارة...', 'info');
-
-        const selectedLectures = Array.from(selectedCheckboxes).map(cb => ({
-            lecNum: cb.value,
-            tableName: cb.dataset.lecture
-        }));
-
-        // Collect all students from all selected lectures
-        const studentsMap = new Map(); // Map<Code, {Name, Code, attendance, regionData}>
-
-        // Fetch data from each lecture
-        for (const lec of selectedLectures) {
-            const students = await fetchLectureStudents(lec.lecNum);
-            await enrichStudentNamesForExport(students);
-            
-            students.forEach(record => {
-                const fields = record.fields || {};
-                const code = fields.Code || record.id;
-                const name = getStudentName(fields) || '---';
-                const region = fields.Region || 'Unknown';
-                
-                const hasAttendance = fields.Qr_Live === true || fields.Qr_Live === 'true';
-                
-                if (!studentsMap.has(code)) {
-                    studentsMap.set(code, {
-                        Name: name,
-                        Code: code,
-                        attendance: {},
-                        regionData: {}  // Store region for each lecture
-                    });
-                }
-                
-                studentsMap.get(code).attendance[`Lec ${lec.lecNum}`] = hasAttendance ? 'X' : '';
-                // Store region data for this lecture
-                studentsMap.get(code).regionData[`Lec ${lec.lecNum}`] = region;
-            });
-        }
-
-        // If no students found
-        if (studentsMap.size === 0) {
-            showAlert('❌ لا توجد بيانات طلاب في المحاضرات المختارة', 'error');
-            return;
-        }
-
-        // Prepare data for Excel
-        const excelData = [];
-        
-        studentsMap.forEach((student, code) => {
-            const row = {
-                'الاسم': student.Name,
-                'الكود': student.Code
-            };
-            
-            // Add lecture columns in order
-            selectedLectures.forEach(lec => {
-                row[`Lec ${lec.lecNum}`] = student.attendance[`Lec ${lec.lecNum}`] || '';
-            });
-            
-            excelData.push(row);
-        });
-
-        // Sort by name
-        excelData.sort((a, b) => a['الاسم'].localeCompare(b['الاسم'], 'ar'));
-
-        // Create a new workbook with ExcelJS
-        const workbook = new ExcelJS.Workbook();
-        const worksheet = workbook.addWorksheet('Attendance');
-
-        // Add header row
-        const headers = ['الاسم', 'الكود'];
-        selectedLectures.forEach(lec => {
-            headers.push(`Lec ${lec.lecNum}`);
-        });
-        worksheet.addRow(headers);
-
-        // Add data rows with Region-based coloring
-        excelData.forEach((row, rowIndex) => {
-            const rowData = [row['الاسم'], row['الكود']];
-            selectedLectures.forEach(lec => {
-                rowData.push(row[`Lec ${lec.lecNum}`] || '');
-            });
-            
-            const newRow = worksheet.addRow(rowData);
-            
-            // Color lecture columns based on region
-            const studentCode = Array.from(studentsMap.keys()).find(code => {
-                const student = studentsMap.get(code);
-                return student.Name === row['الاسم'] && student.Code === row['الكود'];
-            });
-            
-            if (studentCode) {
-                const student = studentsMap.get(studentCode);
-                selectedLectures.forEach((lec, lecIndex) => {
-                    const cellIndex = 3 + lecIndex;  // Column index (1-based: 3 = Lec 1)
-                    const region = student.regionData[`Lec ${lec.lecNum}`];
-                    
-                    if (region === 'Out region') {
-                        // Red background for Out region lectures
-                        const cell = newRow.getCell(cellIndex);
-                        cell.fill = {
-                            type: 'pattern',
-                            pattern: 'solid',
-                            fgColor: { argb: 'FFDC2626' }  // Red
-                        };
-                        cell.font = { color: { argb: 'FFFFFFFF' }, bold: true };
-                    }
-                });
-            }
-        });
-
-        // Set column widths
-        worksheet.getColumn(1).width = 30;  // Name
-        worksheet.getColumn(2).width = 15;  // Code
-        // Add width for each lecture column
-        for (let i = 0; i < selectedLectures.length; i++) {
-            worksheet.getColumn(3 + i).width = 9;  // Lecture columns  
-        }
-
-        // Apply professional formatting
-        applyProfessionalFormatting(worksheet, 1, excelData.length + 1);
-
-        // Generate file name with timestamp
-        const timestamp = new Date().toLocaleString('ar-EG').replace(/[\/:]/g, '-');
-        const lecRange = selectedLectures.length === 1 
-            ? `Lec${selectedLectures[0].lecNum}` 
-            : `Lec${selectedLectures[0].lecNum}-${selectedLectures[selectedLectures.length - 1].lecNum}`;
-        const fileName = `Attendance_${lecRange}_${timestamp}.xlsx`;
-
-        // Write the file using browser download method
-        const buffer = await workbook.xlsx.writeBuffer();
-        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(link.href);
-
-        showAlert(`✓ تم تصدير بيانات ${excelData.length} طالب من ${selectedLectures.length} محاضرة!\nملف: ${fileName}`, 'success');
-        console.log('✓ Multiple lectures exported successfully:', fileName);
-
+        response = await axios.post(
+            '/api/export',
+            { kind, lectureNumbers },
+            { headers: { 'Content-Type': 'application/json' }, withCredentials: true, responseType: 'blob' }
+        );
     } catch (error) {
-        console.error('❌ Error exporting multiple lectures:', error);
-        showAlert('❌ حدث خطأ أثناء التصدير', 'error');
+        const responseData = error.response?.data;
+        if (responseData instanceof Blob) {
+            try {
+                const errorBody = JSON.parse(await responseData.text());
+                if (errorBody.error === 'no_students') {
+                    throw new Error('❌ لا توجد بيانات طلاب لتصديرها.');
+                }
+            } catch (parseError) {
+                if (parseError instanceof Error && parseError.message.includes('لا توجد بيانات')) throw parseError;
+            }
+        }
+        throw new Error(error.response ? '❌ تعذر إنشاء ملف Excel.' : '❌ تعذر الاتصال بخدمة التصدير.');
     }
+
+    const contentType = response.headers?.['content-type'] || '';
+    if (contentType.includes('application/json')) {
+        const errorBody = JSON.parse(await response.data.text());
+        throw new Error(errorBody.error === 'no_students' ? '❌ لا توجد بيانات طلاب لتصديرها.' : '❌ تعذر إنشاء ملف Excel.');
+    }
+
+    const disposition = response.headers?.['content-disposition'] || '';
+    const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || 'Attendance.xlsx';
+    const blob = response.data instanceof Blob
+        ? response.data
+        : new Blob([response.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(downloadUrl);
 }
 
 /**
@@ -2726,96 +2563,11 @@ async function exportToExcel() {
     }
 
     try {
-        await loadScriptOnce('/vendor/exceljs.min.js', 'ExcelJS');
-        showAlert('📊 جاري تصدير البيانات...', 'info');
-        
-        // Fetch all students from the lecture
-        const students = await fetchLectureStudents(currentLectureNumber);
-        
-        if (students.length === 0) {
-            showAlert('❌ لا توجد بيانات طلاب لتصديرها', 'error');
-            return;
-        }
-
-        await enrichStudentNamesForExport(students);
-
-        // Prepare data for Excel
-        const excelData = [];
-        
-        students.forEach(record => {
-            const fields = record.fields || {};
-            excelData.push({
-                'الاسم': getStudentName(fields) || '---',
-                'الكود': fields.Code || record.id || '---',
-                'Live QR': fields.Qr_Live === true || fields.Qr_Live === 'true' ? '✓' : '',
-                'المنطقة': fields.Region || '---'
-            });
-        });
-
-        // Sort by name
-        excelData.sort((a, b) => a['الاسم'].localeCompare(b['الاسم'], 'ar'));
-
-        // Create a new workbook with ExcelJS
-        const workbook = new ExcelJS.Workbook();
-        const worksheet = workbook.addWorksheet(`Lecture_${currentLectureNumber}`);
-
-        // Add header row
-        const headers = ['الاسم', 'الكود', 'Live QR', 'المنطقة'];
-        worksheet.addRow(headers);
-
-        // Add data rows in the same order as the headers.
-        excelData.forEach(row => {
-            worksheet.addRow([row['الاسم'], row['الكود'], row['Live QR'], row['المنطقة']]);
-        });
-
-        // Set column widths
-        worksheet.getColumn(1).width = 35;  // Name
-        worksheet.getColumn(2).width = 10;  // Code
-        worksheet.getColumn(3).width = 12;  // Live QR
-        worksheet.getColumn(4).width = 16;  // Region
-
-        // Apply professional formatting
-        applyProfessionalFormatting(worksheet, 1, excelData.length + 1);
-
-        for (let rowNumber = 2; rowNumber <= excelData.length + 1; rowNumber++) {
-            const row = worksheet.getRow(rowNumber);
-            const attendanceCell = row.getCell(3);
-            if (attendanceCell.value === '✓') {
-                attendanceCell.font = { name: 'Segoe UI', size: 12, bold: true, color: { argb: 'FF16803C' } };
-            }
-
-            const regionCell = row.getCell(4);
-            if (regionCell.value === 'Out region' || regionCell.value === 'In region') {
-                regionCell.fill = {
-                    type: 'pattern',
-                    pattern: 'solid',
-                    fgColor: { argb: regionCell.value === 'Out region' ? 'FFDC2626' : 'FF16A34A' }
-                };
-                regionCell.font = { name: 'Segoe UI', size: 10, color: { argb: 'FFFFFFFF' }, bold: true };
-            }
-        }
-
-        // Generate file name with timestamp
-        const timestamp = new Date().toLocaleString('ar-EG').replace(/[\/:]/g, '-');
-        const fileName = `Attendance_Lec${currentLectureNumber}_${timestamp}.xlsx`;
-
-        // Write the file using browser download method
-        const buffer = await workbook.xlsx.writeBuffer();
-        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(link.href);
-
-        showAlert(`✓ تم تصدير بيانات ${excelData.length} طالب!\nملف: ${fileName}`, 'success');
-        console.log('✓ Excel file exported successfully:', fileName);
-
+        await downloadAttendanceExport('single', [Number(currentLectureNumber)]);
+        showAlert('✓ تم تصدير ملف المحاضرة بنجاح.', 'success');
     } catch (error) {
         console.error('❌ Error exporting to Excel:', error);
-        showAlert('❌ حدث خطأ أثناء التصدير. تأكد من أن لديك بيانات لتصديرها', 'error');
+        showAlert(error.message || '❌ حدث خطأ أثناء التصدير.', 'error');
     }
 }
 

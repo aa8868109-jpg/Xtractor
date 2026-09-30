@@ -1,6 +1,7 @@
 const protectionHandler = require('./protection');
 const dataHandler = require('./data/[...slug]');
 const authHandler = require('./auth');
+const exportHandler = require('./export');
 const { enforceSameOrigin } = require('./request-security');
 
 function parseFormData(raw) {
@@ -80,6 +81,10 @@ module.exports = async function handler(req, res) {
 
     if (pathname === '/api/auth') {
       return authHandler(req, res);
+    }
+
+    if (pathname === '/api/export') {
+      return exportHandler(req, res);
     }
 
     if (pathname.startsWith('/api/data/')) {
