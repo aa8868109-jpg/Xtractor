@@ -1,6 +1,9 @@
 const { getFirestore } = require('../firebase');
 const { validateSessionToken } = require('../session');
 const { isIP } = require('net');
+const { checkRateLimit } = require('../rate-limit');
+const { enforceSameOrigin } = require('../request-security');
+const { validateStudentPatch } = require('../data-policy');
 
 function requireSession(req, res) {
   const session = validateSessionToken(req);
@@ -46,10 +49,11 @@ function normalizeFingerprint(value) {
   return String(value || '').trim().replace(/\s+/g, '').slice(0, 256);
 }
 
-function toRecord(doc, collection = '') {
+function toRecord(doc, collection = '', role = 'doctor') {
   const data = doc.data() || {};
   const fields = {};
   for (const [key, value] of Object.entries(data)) {
+    if (role === 'student' && ['Device_Fingerprint', 'Device Fingerprint', 'deviceFingerprint'].includes(key)) continue;
     const canonicalKey = canonicalizeNameKey(key);
     if (key === 'Qr_Live') fields.Qr_Live = value;
     else if (key === 'Device_ip') fields['Device IP'] = value;
@@ -128,8 +132,53 @@ function toFirestore(fields) {
   return result;
 }
 
+const GEO_BOUNDARIES = [
+  { lat: 29.9820791, lng: 31.2336799 },
+  { lat: 29.9821587, lng: 31.2335790 },
+  { lat: 29.9816374, lng: 31.2335180 },
+  { lat: 29.9817190, lng: 31.2332451 }
+];
+
+function resolveStudentLocation(value) {
+  if (typeof value !== 'string' || value.length > 500) return null;
+
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.hostname !== 'maps.google.com') return null;
+    const coordinates = String(url.searchParams.get('q') || '').split(',').map(Number);
+    if (coordinates.length !== 2) return null;
+    const [lat, lng] = coordinates;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+
+    let isInside = false;
+    for (let i = 0, j = GEO_BOUNDARIES.length - 1; i < GEO_BOUNDARIES.length; j = i++) {
+      const current = GEO_BOUNDARIES[i];
+      const previous = GEO_BOUNDARIES[j];
+      const intersects = ((current.lat > lat) !== (previous.lat > lat)) &&
+        (lng < (previous.lng - current.lng) * (lat - current.lat) / (previous.lat - current.lat) + current.lng);
+      if (intersects) isInside = !isInside;
+    }
+
+    if (!isInside) {
+      isInside = GEO_BOUNDARIES.some(point =>
+        Math.abs(point.lat - lat) <= 0.00015 && Math.abs(point.lng - lng) <= 0.00015
+      );
+    }
+
+    return {
+      location: `https://maps.google.com/?q=${lat},${lng}`,
+      region: isInside ? 'In region' : 'Out region'
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
 module.exports = async function handler(req, res) {
   try {
+    if (!enforceSameOrigin(req, res)) return;
+    if (!checkRateLimit(req, res, { endpoint: 'data', maxRequests: 120, windowMs: 60000 })) return;
+
     const session = requireSession(req, res);
     if (!session) return;
 
@@ -149,6 +198,10 @@ module.exports = async function handler(req, res) {
 
     if (collection === 'MODE') {
       const ref = firestore.collection('MODE').doc('Website Status');
+      if (!['GET', 'POST', 'PATCH', 'PUT'].includes(method)) {
+        return res.status(405).json({ error: 'method_not_allowed' });
+      }
+
       if (method === 'GET') {
         if (session.role !== 'doctor' && session.role !== 'student') {
           return res.status(403).json({ error: 'forbidden_role' });
@@ -173,7 +226,13 @@ module.exports = async function handler(req, res) {
       const updates = {};
       if (sourceFields['Student Mode'] !== undefined) updates.Student_Mode = sourceFields['Student Mode'] === 'ON' || sourceFields['Student Mode'] === true;
       if (sourceFields.Lecture !== undefined) updates.Lecture = Number(sourceFields.Lecture) || null;
-      if (sourceFields['QR Selected'] !== undefined) updates.QR_Selected = sourceFields['QR Selected'] || 'NONE';
+      if (sourceFields['QR Selected'] !== undefined) {
+        const selectedQr = sourceFields['QR Selected'] || 'NONE';
+        if (selectedQr !== 'NONE' && (typeof selectedQr !== 'string' || !/^XTRACTOR-[A-Za-z0-9-]{12,120}$/.test(selectedQr))) {
+          return res.status(400).json({ error: 'invalid_live_qr' });
+        }
+        updates.QR_Selected = selectedQr;
+      }
       if (sourceFields.Name !== undefined) updates.Name = String(sourceFields.Name).slice(0, 200);
       await ref.set(updates, { merge: true });
       const snap = await ref.get();
@@ -199,12 +258,12 @@ module.exports = async function handler(req, res) {
 
       const byDocId = await ref.doc(documentId).get();
       if (byDocId.exists) {
-        return res.json({ records: [toRecord(byDocId, collection)] });
+        return res.json({ records: [toRecord(byDocId, collection, session.role)] });
       }
 
       const byCodeField = await ref.where('Code', '==', documentId).limit(1).get();
       if (!byCodeField.empty) {
-        return res.json({ records: byCodeField.docs.map(doc => toRecord(doc, collection)) });
+        return res.json({ records: byCodeField.docs.map(doc => toRecord(doc, collection, session.role)) });
       }
 
       return res.json({ records: [] });
@@ -260,7 +319,7 @@ module.exports = async function handler(req, res) {
             return res.status(403).json({ error: 'student_device_ip_missing' });
           }
           if (myDeviceIP === requestedIP) {
-            return res.json({ records: [toRecord(myRecord, collection)] });
+            return res.json({ records: [toRecord(myRecord, collection, session.role)] });
           }
 
           return res.status(403).json({ error: 'student_device_mismatch' });
@@ -278,19 +337,44 @@ module.exports = async function handler(req, res) {
     }
 
     if (method === 'PATCH' || method === 'PUT') {
-      if (session.role === 'student') {
-        if (!documentId) return res.status(400).json({ error: 'missing_document_id' });
-        const current = await ref.doc(documentId).get();
-        if (!current.exists) return res.status(404).json({ error: 'record_not_found' });
-        const currentCode = String(current.data()?.Code || current.id || '').trim();
-        const currentDocId = String(current.id || '').trim();
-        if (currentCode !== session.userCode && currentDocId !== session.userCode) {
-          return res.status(403).json({ error: 'student_forbidden' });
-        }
+      if (session.role === 'student' && method !== 'PATCH') {
+        return res.status(403).json({ error: 'student_forbidden_method' });
       }
 
       if (!documentId) return res.status(400).json({ error: 'missing_document_id' });
       const fields = sanitizeFields(req.body?.fields || req.body || {});
+
+      if (session.role === 'student') {
+        const current = await ref.doc(documentId).get();
+        if (!current.exists) return res.status(404).json({ error: 'record_not_found' });
+
+        const modeSnap = await firestore.collection('MODE').doc('Website Status').get();
+        const modeRecord = modeSnap.exists ? modeSnap.data() : {};
+        const policyError = validateStudentPatch({
+          collection,
+          session,
+          documentId,
+          currentRecord: current,
+          modeRecord,
+          fields,
+          qrToken: req.body?.qrToken
+        });
+        if (policyError) {
+          return res.status(policyError === 'student_invalid_location' ? 400 : 403).json({ error: policyError });
+        }
+
+        const updates = {};
+        if (fields.Qr_Live === true) updates.Qr_Live = true;
+        if (fields.Location !== undefined) {
+          const location = resolveStudentLocation(fields.Location);
+          if (!location) return res.status(400).json({ error: 'student_invalid_location' });
+          updates.Location = location.location;
+          updates.Region = location.region;
+        }
+        await ref.doc(documentId).set(updates, { merge: true });
+        return res.json(toRecord(await ref.doc(documentId).get(), collection, session.role));
+      }
+
       if (Object.keys(fields).length === 0) {
         return res.status(400).json({ error: 'empty_update_payload' });
       }
@@ -319,6 +403,6 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ error: 'method_not_allowed' });
   } catch (error) {
     console.error('Data handler error:', error.message || error);
-    return res.status(500).json({ error: 'data_handler_error', message: error.message || String(error) });
+    return res.status(500).json({ error: 'data_handler_error' });
   }
 };

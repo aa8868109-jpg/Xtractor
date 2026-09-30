@@ -1240,7 +1240,7 @@
         <div id="top-bar" style="display: none; margin-bottom: 16px;">
             <div class="top-bar">
                 <span class="mode-badge student" id="mode-badge">STUDENT</span>
-                <button class="btn-exit" onclick="exitMode()">← EXIT</button>
+                <button class="btn-exit" data-action="exit-mode">← EXIT</button>
             </div>
         </div>
 
@@ -1274,7 +1274,7 @@
                     <label for="student-code">Student ID</label>
                     <input type="text" id="student-code" placeholder="Enter your Student ID" maxlength="10" autocomplete="off">
                 </div>
-                <button id="signin-btn" data-rate-key="submitStudentCode" onclick="submitStudentCode()">Sign In →</button>
+                <button id="signin-btn" data-rate-key="submitStudentCode" data-action="sign-in">Sign In →</button>
             </div>
 
             <!-- ====== Student View ====== -->
@@ -1305,12 +1305,12 @@
                     <div id="qr_reader"></div>
                     <div class="scanner-status" id="scanner-status">Point camera at QR code</div>
                     <div class="scanner-controls">
-                        <button class="btn-secondary" onclick="stopScanner()">Stop</button>
-                        <button class="btn-green" onclick="startScanner()">Refresh</button>
+                        <button class="btn-secondary" data-action="stop-scanner">Stop</button>
+                        <button class="btn-green" data-action="start-scanner">Refresh</button>
                     </div>
                 </div>
 
-                <button id="start-scanner-btn" onclick="startScanner()" style="margin-top: 18px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: white; font-family: var(--font-display); font-weight: 800; box-shadow: 0 4px 20px rgba(0,180,255,0.35);">
+                <button id="start-scanner-btn" data-action="start-scanner" style="margin-top: 18px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: white; font-family: var(--font-display); font-weight: 800; box-shadow: 0 4px 20px rgba(0,180,255,0.35);">
                     Start QR Scanner →
                 </button>
             </div>
@@ -1322,7 +1322,7 @@
                         <img id="live-qr-display-image" src="" alt="Active QR" style="width:270px; max-width:100%; height:auto; border-radius:12px; background:#fff; padding:8px; margin:0 auto; display:block;">
                     </div>
                     <div id="live-qr-status" style="margin-top:18px; color:var(--text-secondary); font-size:14px; line-height:1.7;">Waiting for active QR...</div>
-                    <button type="button" onclick="closeLiveQrPage()" class="btn-secondary" style="margin-top:18px;">Back to dashboard</button>
+                    <button type="button" data-action="close-live-qr" class="btn-secondary" style="margin-top:18px;">Back to dashboard</button>
                 </div>
             </div>
 
@@ -1335,7 +1335,7 @@
                         <label for="lecture-number">Lecture Number</label>
                         <input type="number" id="lecture-number" placeholder="Lecture 5" min="1">
                     </div>
-                    <button onclick="selectLecture()" style="background: linear-gradient(135deg, var(--accent-2), #0d3fa8); color: white; font-family: var(--font-display); font-weight: 800; box-shadow: 0 4px 20px rgba(26,95,212,0.35);">
+                    <button data-action="activate-lecture" style="background: linear-gradient(135deg, var(--accent-2), #0d3fa8); color: white; font-family: var(--font-display); font-weight: 800; box-shadow: 0 4px 20px rgba(26,95,212,0.35);">
                         Activate Lecture →
                     </button>
                 </div>
@@ -1347,25 +1347,25 @@
                     </div>
 
                     <!-- Export Single Lecture Button -->
-                    <button onclick="exportToExcel()" style="background: linear-gradient(135deg, #4ef0b4, #00c8f0); color: var(--ink); font-family: var(--font-display); font-weight: 800; box-shadow: 0 4px 20px rgba(78,240,180,0.35); margin-bottom: 20px;">
+                    <button data-action="export-single-lecture" style="background: linear-gradient(135deg, #4ef0b4, #00c8f0); color: var(--ink); font-family: var(--font-display); font-weight: 800; box-shadow: 0 4px 20px rgba(78,240,180,0.35); margin-bottom: 20px;">
                         Export Single Lecture
                     </button>
 
                     <!-- Multiple Lectures Export Section -->
                     <div class="section-label">Export Multiple Lectures</div>
-                    <button type="button" onclick="openMultipleLecturesExportPage()" class="export-button">Export Selected Lectures</button>
+                    <button type="button" data-action="open-multiple-lectures" class="export-button">Export Selected Lectures</button>
 
                     <div class="qr-selection-wrapper">
                         <div class="section-label">Live Attendance QR</div>
                         <div class="mode-status" id="mode-status">Status: No QR Selected</div>
-                        <button type="button" onclick="openLiveQrPage()" style="width:100%; margin-top:14px; background:linear-gradient(135deg, #00c8f0, #1a5fd4); color:#07141b; box-shadow:0 10px 25px rgba(0,200,240,0.25);">Open QR Page</button>
+                        <button type="button" data-action="open-live-qr" style="width:100%; margin-top:14px; background:linear-gradient(135deg, #00c8f0, #1a5fd4); color:#07141b; box-shadow:0 10px 25px rgba(0,200,240,0.25);">Open QR Page</button>
                     </div>
 
                     <div class="qr-selection-wrapper" style="margin-top:18px;">
                         <div class="section-label">Student Mode</div>
                         <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                            <button type="button" onclick="toggleStudentMode(true)" style="flex:1; min-width:140px; background:linear-gradient(135deg, #4ef0b4, #1bc6aa); color:#07141b; box-shadow:0 10px 25px rgba(78,240,180,0.2);">Start Student Mode</button>
-                            <button type="button" onclick="toggleStudentMode(false)" class="btn-secondary" style="flex:1; min-width:140px;">Stop Student Mode</button>
+                            <button type="button" data-action="start-student-mode" style="flex:1; min-width:140px; background:linear-gradient(135deg, #4ef0b4, #1bc6aa); color:#07141b; box-shadow:0 10px 25px rgba(78,240,180,0.2);">Start Student Mode</button>
+                            <button type="button" data-action="stop-student-mode" class="btn-secondary" style="flex:1; min-width:140px;">Stop Student Mode</button>
                         </div>
                     </div>
 
@@ -1373,21 +1373,21 @@
                         <div class="section-label">Manual Attendance</div>
                         <div class="form-group">
                             <label for="manual-preparation-code">Search by student code</label>
-                            <input type="search" id="manual-preparation-code" inputmode="search" autocomplete="off" placeholder="Enter student code" oninput="searchPreparationStudents()">
+                            <input type="search" id="manual-preparation-code" inputmode="search" autocomplete="off" placeholder="Enter student code" data-action="search-preparation">
                         </div>
                         <div class="form-group" style="margin-top:12px;">
                             <label for="manual-preparation-student">Select student</label>
-                            <select id="manual-preparation-student" onchange="updatePreparationButtonState()" disabled>
+                            <select id="manual-preparation-student" data-action="select-preparation" disabled>
                                 <option value="">Search for a student first</option>
                             </select>
                         </div>
-                        <button type="button" id="manual-preparation-btn" onclick="prepareSelectedStudent()" disabled style="width:100%; margin-top:14px; background:linear-gradient(135deg, #4ef0b4, #1bc6aa); color:#07141b;">Preparation</button>
+                        <button type="button" id="manual-preparation-btn" data-action="prepare-student" disabled style="width:100%; margin-top:14px; background:linear-gradient(135deg, #4ef0b4, #1bc6aa); color:#07141b;">Preparation</button>
                         <div id="manual-preparation-status" class="mode-status" role="status" aria-live="polite" style="margin-top:12px;">Select a lecture to prepare a student.</div>
                     </div>
 
                     <!-- Students List -->
                     <div class="section-label">Attendance</div>
-                    <button type="button" onclick="openAttendanceView()" class="export-button">View</button>
+                    <button type="button" data-action="open-attendance" class="export-button">View</button>
                 </div>
             </div>
 
@@ -1398,8 +1398,8 @@
                     <div class="empty-list">No students have scanned the live QR yet</div>
                 </div>
                 <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap;">
-                    <button type="button" onclick="refreshAttendanceView()" class="btn-secondary" style="flex:1; min-width:140px;">Refresh</button>
-                    <button type="button" onclick="closeAttendanceView()" class="btn-secondary" style="flex:1; min-width:140px;">Back to Doctor Page</button>
+                    <button type="button" data-action="refresh-attendance" class="btn-secondary" style="flex:1; min-width:140px;">Refresh</button>
+                    <button type="button" data-action="close-attendance" class="btn-secondary" style="flex:1; min-width:140px;">Back to Doctor Page</button>
                 </div>
             </div>
 
@@ -1408,7 +1408,7 @@
                 <div class="lectures-grid-container">
                     <div class="lectures-header">
                         <label class="lecture-checkbox-label lecture-all-checkbox">
-                            <input type="checkbox" id="lec-all" onchange="toggleAllLectures()">
+                            <input type="checkbox" id="lec-all" data-action="toggle-all-lectures">
                             <span class="checkbox-text">All Lectures</span>
                         </label>
                     </div>
@@ -1429,51 +1429,14 @@
                         <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="14" data-lecture="LEC_14"><span class="checkbox-text">Lec 14</span></label>
                         <label class="lecture-checkbox-label"><input type="checkbox" class="lecture-checkbox" value="15" data-lecture="LEC_15"><span class="checkbox-text">Lec 15</span></label>
                     </div>
-                    <button type="button" onclick="exportMultipleLectures()" class="export-button">Export</button>
-                    <button type="button" onclick="closeMultipleLecturesExportPage()" class="btn-secondary" style="width:100%; margin-top:10px;">Back to Doctor Page</button>
+                    <button type="button" data-action="export-multiple-lectures" class="export-button">Export</button>
+                    <button type="button" data-action="close-multiple-lectures" class="btn-secondary" style="width:100%; margin-top:10px;">Back to Doctor Page</button>
                 </div>
             </div>
 
         </div><!-- /.card -->
     </div><!-- /.container -->
 
-    <script>
-        // Always load the current app source and detect stale bootstraps.
-        // Older cached bundles can still call legacy GET /api/auth handlers, so we
-        // force a fresh load and abort if the boot marker is missing.
-        const _appScript = document.createElement('script');
-        const _appSource = 'app.js';
-        const _cacheBust = Date.now();
-        _appScript.src = `${_appSource}?_cb=${_cacheBust}`;
-        _appScript.onload = () => {
-            if (!window.__XTRACTOR_APP_BOOT__) {
-                console.warn('Missing app boot marker; forcing a fresh load.');
-                window.location.reload();
-            }
-        };
-        _appScript.onerror = () => {
-            console.error('Failed to load app.js; retrying with a fresh cache-busted URL.');
-            _appScript.src = `${_appSource}?_cb=${Date.now() + 1}`;
-        };
-        document.body.appendChild(_appScript);
-    </script>
-
-    <script>
-        // Override showDoctorInterface to use new class names
-        const _origSignIn = document.getElementById('signin-btn');
-
-        // Fix: ensure all buttons get correct class on runtime
-        document.addEventListener('DOMContentLoaded', function() {
-            // Map old button text/onclick to new style
-            document.querySelectorAll('button').forEach(btn => {
-                if (!btn.style.background && !btn.classList.contains('btn-exit') && !btn.classList.contains('btn-secondary') && !btn.classList.contains('btn-green')) {
-                    btn.style.background = 'var(--accent)';
-                    btn.style.color = 'var(--ink)';
-                    btn.style.fontFamily = 'var(--font-display)';
-                    btn.style.fontWeight = '800';
-                }
-            });
-        });
-    </script>
+    <script src="/app.js" defer></script>
 </body>
 </html>

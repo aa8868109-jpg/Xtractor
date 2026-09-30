@@ -2,6 +2,8 @@ const crypto = require('crypto');
 const { getFirestore } = require('./firebase');
 const { SESSION_COOKIE_NAME, createSessionToken } = require('./session');
 const { logSecurityEvent } = require('./security-logger');
+const { checkRateLimit } = require('./rate-limit');
+const { enforceSameOrigin } = require('./request-security');
 
 function safeEqual(left, right) {
     const leftBuffer = Buffer.from(String(left || ''));
@@ -13,17 +15,20 @@ function getCookieSecurityFlags(req = null) {
     const proto = (req?.headers?.['x-forwarded-proto'] || req?.headers?.['X-Forwarded-Proto'] || '').toLowerCase();
     const isHttps = proto.includes('https') || req?.socket?.encrypted || process.env.NODE_ENV === 'production';
     const secureFlag = isHttps ? '; Secure' : '';
-    const sameSiteFlag = isHttps ? 'SameSite=None' : 'SameSite=Lax';
-    return `${sameSiteFlag}${secureFlag}`;
+    return `SameSite=Lax${secureFlag}`;
 }
 
 function setSessionCookie(res, token, req = null) {
     const securityFlags = getCookieSecurityFlags(req);
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-    res.setHeader('Vary', 'Origin, Cookie');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
     const cookieValue = `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=3600; HttpOnly; ${securityFlags};`;
     res.setHeader('Set-Cookie', cookieValue);
+}
+
+function clearSessionCookie(res, req = null) {
+    const securityFlags = getCookieSecurityFlags(req);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; ${securityFlags};`);
 }
 
 function getClientIp(req) {
@@ -87,8 +92,16 @@ async function findStudentDocument(lectureRef, submittedCode) {
 }
 
 module.exports = async function handler(req, res) {
+    if (!enforceSameOrigin(req, res)) return;
+    if (!checkRateLimit(req, res, { endpoint: 'auth', maxRequests: 10, windowMs: 60000 })) return;
+
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'method_not_allowed' });
+    }
+
+    if (req.body?.action === 'logout') {
+        clearSessionCookie(res, req);
+        return res.status(200).json({ authenticated: false });
     }
 
     try {
@@ -109,7 +122,7 @@ module.exports = async function handler(req, res) {
             const token = createSessionToken({ role: 'doctor', issuedAt: Date.now() });
             setSessionCookie(res, token, req);
             logSecurityEvent('doctor_login_success', { req });
-            return res.json({ authenticated: true, role: 'doctor', token });
+            return res.json({ authenticated: true, role: 'doctor' });
         }
 
         if (!/^[A-Za-z0-9\-_]+$/.test(submittedCode)) {
@@ -190,10 +203,15 @@ module.exports = async function handler(req, res) {
             }
         }
 
+        await studentDoc.ref.set({
+            Device_ip: clientIp,
+            Device_Fingerprint: incomingFingerprint
+        }, { merge: true });
+
         const token = createSessionToken({ role: 'student', userCode: submittedCode, lecture: lectureNumber, issuedAt: Date.now() });
         setSessionCookie(res, token, req);
         logSecurityEvent('student_login_success', { req, lectureNumber });
-        return res.json({ authenticated: true, role: 'student', token, deviceIp: clientIp, allowLegacyIpMigration });
+        return res.json({ authenticated: true, role: 'student', deviceIp: clientIp, allowLegacyIpMigration });
     } catch (error) {
         logSecurityEvent('authentication_error', { req, message: error.message || String(error) });
         console.error('Authentication error:', error.message || error);

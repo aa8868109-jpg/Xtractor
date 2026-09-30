@@ -1,11 +1,18 @@
 const { getFirestore } = require('./firebase');
+const { checkRateLimit } = require('./rate-limit');
+const { enforceSameOrigin } = require('./request-security');
 
 // Simple in-memory cache — per-instance, short TTL
 const CACHE_TTL_MS = 30 * 1000;
 if (!global._protectionCache) global._protectionCache = { ts: 0, data: null };
 
 module.exports = async function handler(req, res) {
+  if (!enforceSameOrigin(req, res)) return;
+  if (!checkRateLimit(req, res, { endpoint: 'protection', maxRequests: 20, windowMs: 60000 })) return;
+
   try {
+    if (req.method !== 'GET') return res.status(405).json({ error: 'method_not_allowed' });
+
     const now = Date.now();
     if (global._protectionCache.data && (now - global._protectionCache.ts) < CACHE_TTL_MS) {
       return res.status(200).json({ success: true, used: 'cache', data: global._protectionCache.data });

@@ -19,6 +19,14 @@ function checkRateLimit(req, res, options = {}) {
 
   const key = `${endpoint}:${getClientIp(req)}`;
   const now = Date.now();
+
+  if (RATE_LIMITS.size > 1000) {
+    for (const [bucketKey, bucketValue] of RATE_LIMITS) {
+      if (bucketValue.resetAt <= now) RATE_LIMITS.delete(bucketKey);
+      if (RATE_LIMITS.size <= 1000) break;
+    }
+  }
+
   const bucket = RATE_LIMITS.get(key) || { count: 0, resetAt: now + windowMs };
 
   if (now > bucket.resetAt) {

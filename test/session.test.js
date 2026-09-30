@@ -27,6 +27,13 @@ test('rejects modified session tokens', () => {
   assert.equal(session, null);
 });
 
+test('does not accept session tokens from query or request bodies', () => {
+  const token = createSessionToken({ role: 'doctor' });
+  assert.equal(validateSessionToken({ query: { token }, headers: {} }), null);
+  assert.equal(validateSessionToken({ body: { token }, headers: {} }), null);
+  assert.equal(validateSessionToken({ headers: { 'x-xtractor-token': token } }), null);
+});
+
 test('requires a session secret in production', () => {
   const previousNodeEnv = process.env.NODE_ENV;
   const previousSecret = process.env.XTRACTOR_SESSION_SECRET;

@@ -78,12 +78,11 @@ function getCookieValue(rawCookieHeader, name) {
 }
 
 function validateSessionToken(req) {
-  const authHeader = req?.headers?.authorization || req?.headers?.Authorization || req?.headers?.['x-xtractor-token'];
-  const directToken = req?.query?.token || req?.body?.token;
+  const authHeader = req?.headers?.authorization || req?.headers?.Authorization;
   const cookieToken = getCookieValue(req?.headers?.cookie || req?.headers?.Cookie, SESSION_COOKIE_NAME);
 
   const headerToken = typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '').trim() : '';
-  const tokenValue = headerToken || cookieToken || directToken;
+  const tokenValue = headerToken || cookieToken;
 
   if (!tokenValue || typeof tokenValue !== 'string') {
     return null;

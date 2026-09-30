@@ -46,32 +46,7 @@ let currentMode = null; // 'student' or 'doctor'
 let currentStudentCode = null;
 let currentStudentName = null; // To save student name
 let currentStudentRecord = null;
-let currentSessionToken = null; // Active-page token, kept as an explicit fallback for browsers that block cookies.
-const SESSION_TOKEN_KEY = 'xtractor_session_token';
-
-function getCurrentSessionToken() {
-    if (currentSessionToken) return currentSessionToken;
-    try {
-        const stored = safeStorage.getItem(SESSION_TOKEN_KEY);
-        if (stored) {
-            currentSessionToken = stored;
-            return stored;
-        }
-    } catch (e) {}
-    return null;
-}
-
-function persistSessionToken(token) {
-    currentSessionToken = token || null;
-    if (!token) {
-        try { safeStorage.removeItem(SESSION_TOKEN_KEY); } catch (e) {}
-        return;
-    }
-    try { safeStorage.setItem(SESSION_TOKEN_KEY, token); } catch (e) {}
-}
-// Safe storage wrapper: keep the session token in memory or sessionStorage only.
-// The server-side cookie remains the trusted session source; browser storage is only a
-// temporary client-side fallback for the current tab and is never treated as the source of truth.
+// Safe storage wrapper for non-sensitive, current-tab state.
 const _inMemoryStorage = {};
 let _sessionStorageAvailable = false;
 
@@ -138,21 +113,6 @@ function _defaultMinInterval(url) {
 
 async function apiGet(url, config = {}) {
     const key = _normalizeUrlKey(url);
-    const sessionToken = getCurrentSessionToken();
-
-    // Cookie-based auth is the primary state for production, but a short-lived session
-    // token from sessionStorage is also sent as a fallback so mobile browsers and Safari
-    // privacy modes do not silently get 401s on protected reads.
-    if (sessionToken && !config.headers?.Authorization && !config.headers?.authorization) {
-        config = {
-            ...config,
-            headers: {
-                ...(config.headers || {}),
-                Authorization: `Bearer ${sessionToken}`
-            }
-        };
-    }
-
     if (typeof axios !== 'undefined' && axios && axios.get) {
         config = {
             ...config,
@@ -377,21 +337,6 @@ function getActionLockRemaining(actionKey) {
     return rem > 0 ? rem : 0;
 }
 
-// Attach data-rate-limit handling: any button with data-rate-key will be auto-protected
-document.addEventListener('click', (e) => {
-    const btn = e.target.closest && e.target.closest('button[data-rate-key]');
-    if (!btn) return;
-    const key = btn.getAttribute('data-rate-key');
-    if (!key) return;
-    const allowed = allowAction(key, { limit: 6, windowMs: 60 * 1000, lockMs: 5 * 60 * 1000 });
-    if (!allowed) {
-        e.preventDefault();
-        e.stopPropagation();
-        const rem = Math.ceil(getActionLockRemaining(key) / 1000);
-        showAlert(`Too many attempts. Try again in ${rem} seconds.`, 'error');
-    }
-}, true);
-
 // ====== Silence informational console output (keep errors visible)
 // Set to true to hide console.log/info/warn/debug messages that may leak data
 const SILENT_CONSOLE = true;
@@ -399,41 +344,53 @@ if (SILENT_CONSOLE) {
     ['log', 'info', 'warn', 'debug'].forEach(fn => { try { console[fn] = function(){}; } catch(e){} });
 }
 
-// ====== Auto-protect interactive elements (buttons/forms) by adding data-rate-key
-function autoProtectInteractiveElements() {
-    try {
-        // Buttons: assign key from id/name/onclick or generate one
-        const buttons = document.querySelectorAll('button');
-        buttons.forEach(btn => {
-            if (!btn.getAttribute('data-rate-key')) {
-                const onclick = btn.getAttribute('onclick') || '';
-                const match = onclick.match(/([a-zA-Z0-9_]+)\s*\(/);
-                const key = btn.id || btn.name || (match && match[1]) || `btn_${Math.random().toString(36).slice(2,8)}`;
-                btn.setAttribute('data-rate-key', key);
-            }
-        });
-
-        // Forms: attach submit guard
-        const forms = document.querySelectorAll('form');
-        forms.forEach(form => {
-            const key = form.id || form.name || (`form_${form.action || location.pathname}`);
-            form.addEventListener('submit', (ev) => {
-                const allowed = allowAction(key, { limit: 6, windowMs: 60 * 1000, lockMs: 5 * 60 * 1000 });
-                if (!allowed) {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    const rem = Math.ceil(getActionLockRemaining(key) / 1000);
-                    showAlert(`Too many attempts. Try again in ${rem} seconds.`, 'error');
-                }
-            }, { capture: true });
-        });
-    } catch (e) {
-        // Do not leak errors to console if silenced
-        try { console.error('autoProtectInteractiveElements error', e); } catch (ignore) {}
-    }
+function initializeButtonDefaults() {
+    document.querySelectorAll('button').forEach(button => {
+        if (!button.style.background && !button.classList.contains('btn-exit') &&
+            !button.classList.contains('btn-secondary') && !button.classList.contains('btn-green')) {
+            button.style.background = 'var(--accent)';
+            button.style.color = 'var(--ink)';
+            button.style.fontFamily = 'var(--font-display)';
+            button.style.fontWeight = '800';
+        }
+    });
 }
 
-document.addEventListener('DOMContentLoaded', autoProtectInteractiveElements);
+document.addEventListener('DOMContentLoaded', initializeButtonDefaults);
+
+document.addEventListener('click', event => {
+    const action = event.target.closest('[data-action]')?.dataset.action;
+    const handlers = {
+        'exit-mode': exitMode,
+        'sign-in': submitStudentCode,
+        'stop-scanner': stopScanner,
+        'start-scanner': startScanner,
+        'close-live-qr': closeLiveQrPage,
+        'activate-lecture': selectLecture,
+        'export-single-lecture': exportToExcel,
+        'open-multiple-lectures': openMultipleLecturesExportPage,
+        'open-live-qr': openLiveQrPage,
+        'start-student-mode': () => toggleStudentMode(true),
+        'stop-student-mode': () => toggleStudentMode(false),
+        'prepare-student': prepareSelectedStudent,
+        'open-attendance': openAttendanceView,
+        'refresh-attendance': refreshAttendanceView,
+        'close-attendance': closeAttendanceView,
+        'export-multiple-lectures': exportMultipleLectures,
+        'close-multiple-lectures': closeMultipleLecturesExportPage
+    };
+    if (action && handlers[action]) handlers[action]();
+});
+
+document.addEventListener('input', event => {
+    if (event.target.matches('[data-action="search-preparation"]')) searchPreparationStudents();
+});
+
+document.addEventListener('change', event => {
+    const action = event.target.dataset?.action;
+    if (action === 'select-preparation') updatePreparationButtonState();
+    if (action === 'toggle-all-lectures') toggleAllLectures();
+});
 
 // ====== 🔐 Website Protection System Functions ======
 
@@ -767,20 +724,6 @@ async function updateSelectedQR(lectureNumber, qrValue) {
 /**
  * Get Selected QR from MODE table
  */
-async function getSelectedQRFromMode() {
-    try {
-        const record = await getModeRecord();
-        if (!record) return 'NONE';
-
-        const qrSelected = record.fields?.['QR Selected'] || 'NONE';
-        const studentMode = record.fields?.['Student Mode'];
-        return (studentMode === 'ON' || studentMode === true) ? qrSelected : 'NONE';
-    } catch (error) {
-        console.error('❌ خطأ في قراءة جدول MODE:', error);
-        return 'NONE';
-    }
-}
-
 /**
  * 🎚️ تحديث حالة QR Selection من Firestore
  */
@@ -1099,7 +1042,7 @@ async function getDeviceIP() {
  * استخدام جدول RAM الذي يسجل جلسات الدخول الحالية
  */
 async function checkDeviceIPConflict(studentCode, lectureNumber, existingStudentRecord = null, allowLegacyIpMigration = false) {
-    const currentIP = await getDeviceIP();
+    const currentIP = hasValidDeviceIp(deviceIP) ? deviceIP : await getDeviceIP();
     console.log(`🔍 فحص تضارب IP: Code=${studentCode}, IP=${currentIP}, Lecture=${lectureNumber}`);
 
     if (!hasValidDeviceIp(currentIP)) {
@@ -1333,6 +1276,22 @@ async function exitMode() {
     if (currentMode === 'doctor') {
         await updateStudentMode(currentLectureNumber, false);
     }
+
+    try {
+        if (typeof axios !== 'undefined' && axios?.post) {
+            await axios.post('/api/auth', { action: 'logout' }, { withCredentials: true });
+        } else {
+            await fetch('/api/auth', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'logout' })
+            });
+        }
+    } catch (error) {
+        console.warn('Server-side logout could not be confirmed:', error?.message || error);
+    }
+    safeStorage.removeItem('xtractor_session_token');
     
     // 🎯 Stop monitoring Student Mode
     if (monitoringInterval) {
@@ -1423,10 +1382,8 @@ function getStudentCodeFromRecord(recordOrFields = {}) {
 
 function getDataHeaders() {
     const fingerprint = getDeviceFingerprint();
-    const sessionToken = getCurrentSessionToken();
     return {
         'Content-Type': 'application/json',
-        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
         ...(fingerprint ? { 'X-Device-Fingerprint': fingerprint } : {})
     };
 }
@@ -1557,23 +1514,13 @@ async function saveStudentLoginData(studentCode, lectureNumber, studentName, stu
         const mapsLink = studentLocation
             ? `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`
             : '';
-        const region = checkGeographicRegion && typeof checkGeographicRegion === 'function' ? checkGeographicRegion() : 'Unknown';
-        const resolvedCode = getStudentCodeFromRecord(studentRecord) || studentCode;
-        await axios.patch(
-            `/api/data/${encodeURIComponent(tableName)}`,
-            {
-                id: studentRecord.id,
-                fields: {
-                    'Code': resolvedCode || 'UNKNOWN',
-                    'Device IP': deviceIP,
-                    'Device_Fingerprint': getDeviceFingerprint(),
-                    ...(mapsLink ? { 'Location': mapsLink } : {}),
-                    ...(region ? { 'Region': region } : {}),
-                    ...(studentName ? { name: studentName } : {})
-                }
-            },
-            { headers: getDataHeaders() }
-        );
+        if (mapsLink) {
+            await axios.patch(
+                `/api/data/${encodeURIComponent(tableName)}`,
+                { id: studentRecord.id, fields: { Location: mapsLink } },
+                { headers: getDataHeaders() }
+            );
+        }
         if (studentLocation) {
             lastSavedLocation = { lat: studentLocation.lat, lng: studentLocation.lng };
             lastLocationWriteAt = Date.now();
@@ -1588,7 +1535,7 @@ async function saveStudentLoginData(studentCode, lectureNumber, studentName, stu
 /**
  * Update student attendance data in the current lecture table.
  */
-async function updateStudentAttendance(studentCode, lectureNumber, tableName, columnName, existingStudentRecord = null) {
+async function updateStudentAttendance(studentCode, lectureNumber, tableName, qrToken, existingStudentRecord = null) {
     try {
         if (!hasValidDeviceIp(deviceIP)) {
             console.warn('❌ Refusing to update attendance because Device IP is missing or invalid.');
@@ -1606,26 +1553,25 @@ async function updateStudentAttendance(studentCode, lectureNumber, tableName, co
             return null;
         }
 
-        const mapsLink = `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`;
+        const mapsLink = studentLocation
+            ? `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`
+            : '';
         const recordId = studentRecord.id;
-        const region = checkGeographicRegion();
 
         const updateResponse = await axios.patch(
             `/api/data/${encodeURIComponent(tableName)}`,
             {
                 id: recordId,
+                qrToken,
                 fields: {
-                    'Code': getStudentCodeFromRecord(studentRecord) || studentCode || 'UNKNOWN',
-                    [columnName]: true,
-                    'Location': mapsLink,
-                    'Region': region,
-                    'Device IP': deviceIP
+                    Qr_Live: true,
+                    ...(mapsLink ? { Location: mapsLink } : {})
                 }
             },
             { headers: getDataHeaders() }
         );
 
-        console.log(`✓ تم تحديث ${columnName} والموقع والـ Device IP والـ Region للطالب في جدول ${tableName}`);
+        console.log(`✓ تم التحقق من الرمز الحي وتسجيل حضور الطالب في جدول ${tableName}`);
         return updateResponse.data;
     } catch (error) {
         console.error('خطأ في تحديث بيانات الطالب:', error);
@@ -1712,10 +1658,7 @@ async function updateStudentLocation(studentCode, lectureNumber) {
                 {
                     id: recordId,
                     fields: {
-                        'Code': getStudentCodeFromRecord(response.data.records[0]) || studentCode || 'UNKNOWN',
-                        'Location': mapsLink,
-                        'Region': regionStatus,
-                        'Device IP': deviceIP
+                        'Location': mapsLink
                     }
                 },
                 { headers: getDataHeaders() }
@@ -2011,27 +1954,10 @@ async function onQRScanned(decodedText) {
         statusEl.className = 'scanner-status processing';
     }
 
-    const selectedQR = await getSelectedQRFromMode();
-    if (selectedQR === 'NONE') {
-        if (statusEl) {
-            statusEl.textContent = '❌ No live QR is active - Ask instructor to enable QR';
-            statusEl.className = 'scanner-status';
-            setTimeout(() => {
-                if (statusEl) {
-                    statusEl.textContent = '✓ Camera active - Point at QR code';
-                }
-            }, 2500);
-        }
-        showAlert('❌ No live QR is active. Ask the instructor to enable it.', 'error');
-        return;
-    }
-
     const normalizedScanned = String(decodedText).trim();
-    const normalizedSelected = String(selectedQR).trim();
-
-    if (!isLiveQrValue(normalizedSelected)) {
+    if (!isLiveQrValue(normalizedScanned)) {
         if (statusEl) {
-            statusEl.textContent = '❌ Only the live QR is accepted.';
+            statusEl.textContent = '❌ Invalid QR code.';
             statusEl.className = 'scanner-status';
             setTimeout(() => {
                 if (statusEl) {
@@ -2039,21 +1965,7 @@ async function onQRScanned(decodedText) {
                 }
             }, 2500);
         }
-        showAlert('❌ The instructor has not enabled the live QR. Please wait for the current code.', 'error');
-        return;
-    }
-
-    if (normalizedSelected !== normalizedScanned) {
-        if (statusEl) {
-            statusEl.textContent = '❌ Wrong QR! Only the current live QR is accepted.';
-            statusEl.className = 'scanner-status';
-            setTimeout(() => {
-                if (statusEl) {
-                    statusEl.textContent = '✓ Camera active - Point at QR code';
-                }
-            }, 2500);
-        }
-        showAlert('❌ You scanned an old or incorrect QR code. Please scan the current active QR only.', 'error');
+        showAlert('❌ Invalid QR code.', 'warning');
         return;
     }
 
@@ -2066,7 +1978,7 @@ async function onQRScanned(decodedText) {
                 currentStudentCode,
                 currentLectureNumber,
                 tableName,
-                'Qr_Live',
+                normalizedScanned,
                 currentStudentRecord
             );
 
@@ -2914,7 +2826,7 @@ async function exportToExcel() {
  */
 async function submitStudentCode() {
     const codeInput = document.getElementById('student-code').value.trim();
-    const signInBtn = document.querySelector('button[onclick="submitStudentCode()"]');
+    const signInBtn = document.getElementById('signin-btn');
     
     if (!codeInput) {
         showAlert('Please enter your student code', 'error');
@@ -2974,14 +2886,7 @@ async function submitStudentCode() {
                 try { authResponse = { data: JSON.parse(text) }; } catch (e) { authResponse = { data: { authenticated: false } }; }
             }
         }
-        const token = authResponse?.data?.token || '';
-        if (token) {
-            persistSessionToken(token);
-            if (typeof axios !== 'undefined' && axios && axios.defaults) {
-                axios.defaults.headers.common = axios.defaults.headers.common || {};
-                axios.defaults.headers.common.Authorization = `Bearer ${token}`;
-            }
-        }
+        safeStorage.removeItem('xtractor_session_token');
 
         if (!authResponse || !authResponse.data || authResponse.data.authenticated !== true) {
             const reason = authResponse?.data?.reason || 'unknown';
