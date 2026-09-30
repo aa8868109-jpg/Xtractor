@@ -2512,37 +2512,26 @@ async function exportMultipleLectures() {
 async function downloadAttendanceExport(kind, lectureNumbers) {
     let response;
     try {
-        response = await axios.post(
-            '/api/export',
-            { kind, lectureNumbers },
-            { headers: { 'Content-Type': 'application/json' }, withCredentials: true, responseType: 'blob' }
-        );
+        response = await fetch('/api/export', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind, lectureNumbers })
+        });
     } catch (error) {
-        const responseData = error.response?.data;
-        if (responseData instanceof Blob) {
-            try {
-                const errorBody = JSON.parse(await responseData.text());
-                if (errorBody.error === 'no_students') {
-                    throw new Error('❌ لا توجد بيانات طلاب لتصديرها.');
-                }
-            } catch (parseError) {
-                if (parseError instanceof Error && parseError.message.includes('لا توجد بيانات')) throw parseError;
-            }
-        }
-        throw new Error(error.response ? '❌ تعذر إنشاء ملف Excel.' : '❌ تعذر الاتصال بخدمة التصدير.');
+        throw new Error('❌ تعذر الاتصال بخدمة التصدير.');
     }
 
-    const contentType = response.headers?.['content-type'] || '';
+    const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
-        const errorBody = JSON.parse(await response.data.text());
+        const errorBody = await response.json().catch(() => ({}));
         throw new Error(errorBody.error === 'no_students' ? '❌ لا توجد بيانات طلاب لتصديرها.' : '❌ تعذر إنشاء ملف Excel.');
     }
+    if (!response.ok) throw new Error('❌ تعذر إنشاء ملف Excel.');
 
-    const disposition = response.headers?.['content-disposition'] || '';
+    const disposition = response.headers.get('content-disposition') || '';
     const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || 'Attendance.xlsx';
-    const blob = response.data instanceof Blob
-        ? response.data
-        : new Blob([response.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const blob = await response.blob();
     const downloadUrl = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = downloadUrl;
