@@ -2550,7 +2550,7 @@ async function downloadAttendanceExport(kind, lectureNumbers) {
     document.body.appendChild(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(downloadUrl);
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
 }
 
 /**

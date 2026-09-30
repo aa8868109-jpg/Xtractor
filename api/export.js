@@ -88,10 +88,12 @@ module.exports = async function handler(req, res) {
     }
 
     const filename = getExportFilename(kind, lectureNumbers);
+    const workbookFile = Buffer.from(workbookBuffer);
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    return res.status(200).end(Buffer.from(workbookBuffer));
+    res.setHeader('Content-Length', String(workbookFile.length));
+    return res.status(200).end(workbookFile);
   } catch (error) {
     console.error('Attendance export failed:', error.message || error);
     return res.status(500).json({ error: 'export_failed' });
