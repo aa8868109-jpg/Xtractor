@@ -554,10 +554,16 @@ async function getSelectedLectureFromMode() {
             return null;
         }
 
-        const lectureNum = record.fields?.Lecture;
-        const studentMode = record.fields?.['Student Mode'];
-        const courseName = record.fields?.['Course Name'];
-        if ((studentMode === 'ON' || studentMode === true) && lectureNum && COURSE_NAMES.includes(courseName)) {
+        const fields = record.fields || {};
+        const studentMode = fields['Student Mode'];
+        const legacyCourseName = COURSE_NAMES.includes(fields['Course Name']) ? fields['Course Name'] : null;
+        const courseName = legacyCourseName || COURSE_NAMES.find(course => {
+            const lectureValue = fields[course];
+            return lectureValue !== undefined && lectureValue !== null && lectureValue !== '';
+        }) || null;
+        const lectureNum = courseName ? Number(fields[courseName] ?? fields.Lecture) : Number(fields.Lecture || 0);
+
+        if ((studentMode === 'ON' || studentMode === true) && lectureNum && courseName && COURSE_NAMES.includes(courseName)) {
             return { lectureNumber: parseInt(lectureNum, 10), courseName };
         }
 
@@ -641,7 +647,8 @@ async function updateStudentMode(lectureNumber, isEnabled) {
                 fields: {
                     'Lecture': isEnabled ? String(lectureNumber) : null,
                     'Student Mode': isEnabled ? 'ON' : 'OFF',
-                    'Course Name': currentDoctorCourse
+                    'Course Name': currentDoctorCourse,
+                    [currentDoctorCourse]: isEnabled ? String(lectureNumber) : null
                 }
             },
             { headers: getDataHeaders() }
@@ -723,7 +730,8 @@ async function updateSelectedQR(lectureNumber, qrValue) {
                     'Lecture': String(lectureNumber),
                     'QR Selected': qrValue === 'NONE' ? null : qrValue,
                     'Student Mode': studentMode,
-                    'Course Name': currentDoctorCourse
+                    'Course Name': currentDoctorCourse,
+                    [currentDoctorCourse]: String(lectureNumber)
                 }
             },
             { headers: getDataHeaders() }
@@ -826,8 +834,9 @@ function syncLiveQrToMode() {
             fields: {
                 'Lecture': String(currentLectureNumber),
                 'QR Selected': qrValue,
-                    'Student Mode': 'ON',
-                    'Course Name': currentDoctorCourse
+                'Student Mode': 'ON',
+                'Course Name': currentDoctorCourse,
+                [currentDoctorCourse]: String(currentLectureNumber)
             }
         },
         { headers: getDataHeaders() }

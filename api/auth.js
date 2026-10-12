@@ -13,7 +13,7 @@ const {
     isValidDeviceToken
 } = require('../lib/device-policy');
 const { findDoctorAccountMatches } = require('../lib/doctor-accounts');
-const { getCourseStorageFieldName, normalizeCourseName } = require('../lib/course-policy');
+const { getCourseStorageFieldName, getModeActiveCourse, getModeCourseLecture, hasAnyActiveCourseLecture, normalizeCourseName } = require('../lib/course-policy');
 
 function getCookieSecurityFlags(req = null) {
     const proto = (req?.headers?.['x-forwarded-proto'] || req?.headers?.['X-Forwarded-Proto'] || '').toLowerCase();
@@ -145,9 +145,12 @@ module.exports = async function handler(req, res) {
 
         const modeSnap = await firestore.collection('MODE').doc('Website Status').get();
         const modeData = modeSnap.exists ? modeSnap.data() : {};
-        const lectureNumber = Number(modeData.Lecture || 0);
-        const isModeEnabled = modeData.Student_Mode === true || String(modeData.Student_Mode || '').toLowerCase() === 'on';
-        const courseName = normalizeCourseName(modeData.Course_Name ?? modeData['Course Name']);
+        const legacyCourseName = normalizeCourseName(modeData.Course_Name ?? modeData['Course Name']);
+        const activeCourseName = legacyCourseName || getModeActiveCourse(modeData);
+        const resolvedLecture = activeCourseName ? getModeCourseLecture(modeData, activeCourseName) : null;
+        const lectureNumber = Number(modeData.Lecture || resolvedLecture || 0);
+        const isModeEnabled = modeData.Student_Mode === true || String(modeData.Student_Mode || '').toLowerCase() === 'on' || hasAnyActiveCourseLecture(modeData);
+        const courseName = normalizeCourseName(modeData.Course_Name ?? modeData['Course Name']) || activeCourseName;
         const courseField = getCourseStorageFieldName(courseName);
 
         if (!lectureNumber || !isModeEnabled || !courseName || !courseField) {

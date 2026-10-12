@@ -89,6 +89,36 @@ test('students can only mark their own current lecture with the active live QR',
   assert.equal(validateStudentPatch({ ...request, modeRecord: { ...request.modeRecord, Course_Name: 'مبادئ اقتصاد' } }), 'student_course_mismatch');
 });
 
+test('per-course MODE lecture values support multiple concurrent doctor sessions', () => {
+  const liveQr = `XTRACTOR-${Date.now()}-abc12345-xy99`;
+  const courseName = 'إدارة أعمال';
+  const request = {
+    collection: 'LEC_5',
+    session: { role: 'student', userCode: 'S-20', lecture: 5, courseName },
+    documentId: 'S-20',
+    currentRecord: { id: 'S-20', data: () => ({ Code: 'S-20' }) },
+    modeRecord: {
+      Student_Mode: true,
+      Lecture: 5,
+      'إدارة أعمال': '5',
+      'مبادئ قانون': '3',
+      QR_Selected: liveQr
+    },
+    fields: { [courseName]: true },
+    qrToken: liveQr
+  };
+
+  assert.equal(validateStudentPatch(request), null);
+  assert.equal(validateStudentPatch({
+    ...request,
+    modeRecord: { ...request.modeRecord, 'إدارة أعمال': '6' }
+  }), 'student_attendance_disabled');
+  assert.equal(validateStudentPatch({
+    ...request,
+    modeRecord: { ...request.modeRecord, 'مبادئ قانون': '5' }
+  }), 'student_course_mismatch');
+});
+
 test('CSP disallows dynamic and inline scripts and HTML has no inline handlers', () => {
   const vercelConfig = JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'vercel.json'), 'utf8'));
   const csp = vercelConfig.headers[0].headers.find(header => header.key === 'Content-Security-Policy')?.value || '';
