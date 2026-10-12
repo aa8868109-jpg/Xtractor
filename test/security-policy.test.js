@@ -15,6 +15,7 @@ const {
 const { findDoctorAccountMatches } = require('../lib/doctor-accounts');
 const {
   buildAttendanceSummary,
+  buildCourseModeUpdates,
   buildCourseAttendanceRecords,
   getCourseQrFieldName,
   getCourseStorageFieldName,
@@ -136,6 +137,12 @@ test('per-course MODE lecture values support multiple concurrent doctor sessions
       [getCourseQrFieldName(courseName)]: `XTRACTOR-${Date.now()}-C0-abc12345-xy99`
     }
   }), 'student_invalid_live_qr');
+  const { [getCourseQrFieldName(courseName)]: scopedQr, ...unscopedMode } = request.modeRecord;
+  assert.equal(scopedQr, liveQr);
+  assert.equal(validateStudentPatch({
+    ...request,
+    modeRecord: unscopedMode
+  }), 'student_invalid_live_qr');
 });
 
 test('CSP disallows dynamic and inline scripts and HTML has no inline handlers', () => {
@@ -226,6 +233,35 @@ test('MODE course map exposes every active course lecture and course-specific QR
   });
   assert.equal(getCourseQrFieldName('إدارة أعمال'), 'QR_Selected_إدارة_أعمال');
   assert.equal(getCourseQrFieldName('غير معروف'), null);
+});
+
+test('MODE writes only the authenticated doctor course fields', () => {
+  const economicsQr = `XTRACTOR-${Date.now()}-C2-abc12345-xy99`;
+  const businessQr = `XTRACTOR-${Date.now()}-C3-def67890-xy99`;
+
+  assert.deepEqual(buildCourseModeUpdates('مبادئ اقتصاد', {
+    'Student Mode': 'ON',
+    'مبادئ اقتصاد': '4',
+    'QR Selected': economicsQr
+  }), {
+    'مبادئ اقتصاد': '4',
+    QR_Selected_مبادئ_اقتصاد: economicsQr
+  });
+  assert.deepEqual(buildCourseModeUpdates('إدارة أعمال', {
+    'Student Mode': 'ON',
+    'إدارة أعمال': '7',
+    'QR Selected': businessQr
+  }), {
+    'إدارة أعمال': '7',
+    QR_Selected_إدارة_أعمال: businessQr
+  });
+  assert.deepEqual(buildCourseModeUpdates('مبادئ اقتصاد', {
+    'Student Mode': 'OFF',
+    'QR Selected': 'NONE'
+  }), {
+    'مبادئ اقتصاد': null,
+    QR_Selected_مبادئ_اقتصاد: 'NONE'
+  });
 });
 
 test('course summary counts each lecture once and reports current lecture source', () => {

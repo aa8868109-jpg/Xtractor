@@ -7,6 +7,7 @@ const { validateStudentPatch } = require('../../lib/data-policy');
 const { isValidDeviceFingerprint } = require('../../lib/device-policy');
 const {
   buildCourseAttendanceRecords,
+  buildCourseModeUpdates,
   COURSE_NAMES,
   TOTAL_COURSE_LECTURES,
   getCourseQrFieldName,
@@ -275,11 +276,12 @@ module.exports = async function handler(req, res) {
         if (!snap.exists) return res.status(404).json({ error: 'mode_not_found' });
         const data = snap.data() || {};
         const activeCourse = getModeActiveCourse(data);
+        const activeCourseCount = Object.keys(getModeCourseMap(data)).length;
         const courseQrField = getCourseQrFieldName(session.courseName);
         const courseQr = courseQrField ? data[courseQrField] : null;
         const fields = {
-          'Student Mode': (data.Student_Mode === true || String(data.Student_Mode || '').toLowerCase() === 'on' || hasAnyActiveCourseLecture(data)) ? 'ON' : 'OFF',
-          'QR Selected': courseQr || (activeCourse === session.courseName ? data.QR_Selected : null) || 'NONE',
+          'Student Mode': hasAnyActiveCourseLecture(data) ? 'ON' : 'OFF',
+          'QR Selected': courseQr || (activeCourseCount === 1 && activeCourse === session.courseName ? data.QR_Selected : null) || 'NONE',
           Name: data.Name || 'Website Status'
         };
         for (const courseName of COURSE_NAMES) {
@@ -305,9 +307,6 @@ module.exports = async function handler(req, res) {
       if (!doctorCourse) {
         return res.status(403).json({ error: 'doctor_course_not_configured' });
       }
-      if (sourceFields['Student Mode'] !== undefined) {
-        updates.Student_Mode = sourceFields['Student Mode'] === 'ON' || sourceFields['Student Mode'] === true;
-      }
       if (sourceFields['Course Name'] !== undefined) {
         return res.status(400).json({ error: 'deprecated_mode_course_name_field' });
       }
@@ -319,32 +318,21 @@ module.exports = async function handler(req, res) {
         if (selectedQr !== 'NONE' && (typeof selectedQr !== 'string' || !/^XTRACTOR-[A-Za-z0-9-]{12,120}$/.test(selectedQr))) {
           return res.status(400).json({ error: 'invalid_live_qr' });
         }
-        updates.QR_Selected = selectedQr;
-        updates[getCourseQrFieldName(doctorCourse)] = selectedQr;
       }
       if (sourceFields.Name !== undefined) updates.Name = String(sourceFields.Name).slice(0, 200);
 
-      if (sourceFields[doctorCourse] !== undefined) {
-        const lectureValue = Number(sourceFields[doctorCourse]);
-        updates[doctorCourse] = Number.isInteger(lectureValue) && lectureValue > 0 ? String(lectureValue) : null;
-        if (sourceFields['Student Mode'] === undefined && lectureValue > 0) {
-          updates.Student_Mode = true;
-        }
-      }
-
-      if (sourceFields['Student Mode'] !== undefined && sourceFields['Student Mode'] === 'OFF') {
-        updates[doctorCourse] = null;
-      }
+      Object.assign(updates, buildCourseModeUpdates(doctorCourse, sourceFields));
 
       await ref.set(updates, { merge: true });
       const snap = await ref.get();
       const data = snap.data() || {};
       const courseQrField = getCourseQrFieldName(doctorCourse);
       const activeCourse = getModeActiveCourse(data);
+      const activeCourseCount = Object.keys(getModeCourseMap(data)).length;
       const responseFields = {
-        'Student Mode': (data.Student_Mode === true || String(data.Student_Mode || '').toLowerCase() === 'on' || hasAnyActiveCourseLecture(data)) ? 'ON' : 'OFF',
+        'Student Mode': hasAnyActiveCourseLecture(data) ? 'ON' : 'OFF',
         'QR Selected': (courseQrField ? data[courseQrField] : null) ||
-          (activeCourse === doctorCourse ? data.QR_Selected : null) ||
+          (activeCourseCount === 1 && activeCourse === doctorCourse ? data.QR_Selected : null) ||
           'NONE',
         Name: data.Name || 'Website Status'
       };
