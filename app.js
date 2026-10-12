@@ -184,11 +184,6 @@ async function apiGet(url, config = {}) {
                 Accept: 'application/json'
             }
         });
-        const promise = requestPromise.finally(() => {
-            if (_inFlightRequests.get(key) === promise) {
-                _inFlightRequests.delete(key);
-            }
-        });
 
         const text = await response.text();
         let payload = null;
@@ -205,6 +200,11 @@ async function apiGet(url, config = {}) {
         }
 
         return { data: payload };
+    });
+    const promise = requestPromise.finally(() => {
+        if (_inFlightRequests.get(key) === promise) {
+            _inFlightRequests.delete(key);
+        }
     });
 
     _inFlightRequests.set(key, promise);
