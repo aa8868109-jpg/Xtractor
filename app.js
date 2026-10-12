@@ -2276,6 +2276,7 @@ async function getCourseAttendanceSummary(lectureNumber, forceRefresh = false) {
         return courseAttendanceSummaryCache.payload;
     }
 
+    const refreshParam = forceRefresh ? '&refresh=1' : '';
     const response = await apiGet(
         `/api/data/AttendanceSummary?lecture=${encodeURIComponent(lectureNumber)}${refreshParam}`,
         { headers: getDataHeaders() }
