@@ -1,6 +1,12 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createSessionToken, getCookieValue, validateSessionToken } = require('../lib/session');
+const {
+  createSessionToken,
+  getCookieValue,
+  getDoctorSessionCookieName,
+  validateSessionToken
+} = require('../lib/session');
+const { COURSE_NAMES } = require('../lib/course-policy');
 
 test('validates session tokens from cookies and bearer headers', () => {
   const token = createSessionToken({ role: 'doctor' });
@@ -59,4 +65,37 @@ test('requires a session secret in production', () => {
 
 test('malformed cookie encoding is rejected without throwing', () => {
   assert.equal(getCookieValue('xtractor_session=%E0%A4%A', 'xtractor_session'), null);
+});
+
+test('doctor tabs select independent course-scoped sessions', () => {
+  const economics = COURSE_NAMES[2];
+  const accounting = COURSE_NAMES[1];
+  const economicsCookie = getDoctorSessionCookieName(economics);
+  const accountingCookie = getDoctorSessionCookieName(accounting);
+  const economicsToken = createSessionToken({
+    role: 'doctor',
+    doctorName: 'Economics Doctor',
+    courseName: economics
+  });
+  const accountingToken = createSessionToken({
+    role: 'doctor',
+    doctorName: 'Accounting Doctor',
+    courseName: accounting
+  });
+  const cookies = `${economicsCookie}=${encodeURIComponent(economicsToken)}; ${accountingCookie}=${encodeURIComponent(accountingToken)}`;
+
+  const economicsSession = validateSessionToken({
+    headers: { cookie: cookies, 'x-xtractor-session-course': economics }
+  });
+  const accountingSession = validateSessionToken({
+    headers: { cookie: cookies, 'x-xtractor-session-course': accounting }
+  });
+  const mismatchedSession = validateSessionToken({
+    headers: { cookie: cookies, 'x-xtractor-session-course': 'مبادئ قانون' }
+  });
+
+  assert.equal(economicsSession?.courseName, economics);
+  assert.equal(accountingSession?.courseName, accounting);
+  assert.equal(mismatchedSession, null);
+  assert.notEqual(economicsCookie, accountingCookie);
 });

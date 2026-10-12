@@ -1,5 +1,11 @@
 const { getFirestore } = require('../lib/firebase');
-const { SESSION_COOKIE_NAME, createSessionToken, getCookieValue, validateSessionToken } = require('../lib/session');
+const {
+    SESSION_COOKIE_NAME,
+    createSessionToken,
+    getCookieValue,
+    getDoctorSessionCookieName,
+    validateSessionToken
+} = require('../lib/session');
 const { logSecurityEvent } = require('../lib/security-logger');
 const { checkRateLimit } = require('../lib/rate-limit');
 const { enforceSameOrigin } = require('../lib/request-security');
@@ -22,10 +28,10 @@ function getCookieSecurityFlags(req = null) {
     return `SameSite=Lax${secureFlag}`;
 }
 
-function setSessionCookie(res, token, req = null, deviceToken = null) {
+function setSessionCookie(res, token, req = null, deviceToken = null, sessionCookieName = SESSION_COOKIE_NAME) {
     const securityFlags = getCookieSecurityFlags(req);
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-    const cookies = [`${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=3600; HttpOnly; ${securityFlags};`];
+    const cookies = [`${sessionCookieName}=${encodeURIComponent(token)}; Path=/; Max-Age=3600; HttpOnly; ${securityFlags};`];
     if (deviceToken) {
         cookies.push(`${DEVICE_COOKIE_NAME}=${encodeURIComponent(deviceToken)}; Path=/; Max-Age=31536000; HttpOnly; ${securityFlags};`);
     }
@@ -35,7 +41,15 @@ function setSessionCookie(res, token, req = null, deviceToken = null) {
 function clearSessionCookie(res, req = null) {
     const securityFlags = getCookieSecurityFlags(req);
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-    res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; ${securityFlags};`);
+    const requestedCourse = req?.headers?.['x-xtractor-session-course'] || req?.headers?.['X-Xtractor-Session-Course'];
+    const cookieName = requestedCourse
+        ? getDoctorSessionCookieName(requestedCourse)
+        : SESSION_COOKIE_NAME;
+    if (!cookieName) {
+        res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; ${securityFlags};`);
+        return;
+    }
+    res.setHeader('Set-Cookie', `${cookieName}=; Path=/; Max-Age=0; HttpOnly; ${securityFlags};`);
 }
 
 function getClientIp(req) {
@@ -195,7 +209,7 @@ module.exports = async function handler(req, res) {
                 return res.status(401).json({ authenticated: false, reason: 'doctor_course_not_configured' });
             }
             const token = createSessionToken({ role: 'doctor', doctorName, courseName, issuedAt: Date.now() });
-            setSessionCookie(res, token, req);
+            setSessionCookie(res, token, req, null, getDoctorSessionCookieName(courseName));
             logSecurityEvent('doctor_login_success', { req, doctorName });
             return res.json({ authenticated: true, role: 'doctor', doctorName, courseName });
         }

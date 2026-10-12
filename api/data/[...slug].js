@@ -341,12 +341,19 @@ module.exports = async function handler(req, res) {
         if (selectedQr !== 'NONE' && (typeof selectedQr !== 'string' || !/^XTRACTOR-[A-Za-z0-9-]{12,120}$/.test(selectedQr))) {
           return res.status(400).json({ error: 'invalid_live_qr' });
         }
+        const qrCourseMatch = selectedQr.match(/^XTRACTOR-\d{13}-C(\d+)-/);
+        if (qrCourseMatch && Number(qrCourseMatch[1]) !== COURSE_NAMES.indexOf(doctorCourse)) {
+          return res.status(400).json({ error: 'live_qr_course_mismatch' });
+        }
       }
       if (sourceFields.Name !== undefined) updates.Name = String(sourceFields.Name).slice(0, 200);
 
       Object.assign(updates, buildCourseModeUpdates(doctorCourse, sourceFields));
 
-      await ref.set(updates, { merge: true });
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'empty_mode_update' });
+      }
+      await ref.update(updates);
       return res.json({ success: true });
     }
 

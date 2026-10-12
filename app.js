@@ -834,6 +834,7 @@ function renderLiveQrImage(qrValue) {
 function handleExpiredSession() {
     stopLiveQrGenerator();
     renderLiveQrImage(null);
+    const expiredSessionHeaders = getDataHeaders();
 
     ['student-section', 'doctor-panel', 'top-bar', 'live-qr-page'].forEach(id => {
         const element = document.getElementById(id);
@@ -854,7 +855,10 @@ function handleExpiredSession() {
     safeStorage.removeItem('xtractor_session_token');
 
     if (typeof axios !== 'undefined' && axios?.post) {
-        axios.post('/api/auth', { action: 'logout' }, { withCredentials: true }).catch(error => {
+        axios.post('/api/auth', { action: 'logout' }, {
+            headers: expiredSessionHeaders,
+            withCredentials: true
+        }).catch(error => {
             console.warn('Expired session cookie could not be cleared:', error?.message || error);
         });
     }
@@ -1491,12 +1495,15 @@ async function exitMode() {
 
     try {
         if (typeof axios !== 'undefined' && axios?.post) {
-            await axios.post('/api/auth', { action: 'logout' }, { withCredentials: true });
+            await axios.post('/api/auth', { action: 'logout' }, {
+                headers: getDataHeaders(),
+                withCredentials: true
+            });
         } else {
             await fetch('/api/auth', {
                 method: 'POST',
                 credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
+                headers: getDataHeaders(),
                 body: JSON.stringify({ action: 'logout' })
             });
         }
@@ -1602,6 +1609,9 @@ function getDataHeaders() {
     const fingerprint = getDeviceFingerprint();
     return {
         'Content-Type': 'application/json',
+        ...(currentMode === 'doctor' && currentDoctorCourse
+            ? { 'X-Xtractor-Session-Course': currentDoctorCourse }
+            : {}),
         ...(fingerprint ? { 'X-Device-Fingerprint': fingerprint } : {})
     };
 }
@@ -2770,7 +2780,7 @@ async function downloadAttendanceExport(kind, lectureNumbers) {
         response = await fetch('/api/export', {
             method: 'POST',
             credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getDataHeaders(),
             body: JSON.stringify({ kind, lectureNumbers })
         });
     } catch (error) {
