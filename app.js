@@ -818,6 +818,37 @@ function renderLiveQrImage(qrValue) {
     }
 }
 
+function handleExpiredSession() {
+    stopLiveQrGenerator();
+    renderLiveQrImage(null);
+
+    ['student-section', 'doctor-panel', 'top-bar', 'live-qr-page'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.style.display = 'none';
+    });
+    const loginSection = document.getElementById('login-section');
+    if (loginSection) loginSection.style.display = 'block';
+    const qrStatus = document.getElementById('live-qr-status');
+    if (qrStatus) qrStatus.textContent = 'Sign in again to activate the live QR.';
+
+    currentMode = null;
+    currentStudentCode = null;
+    currentStudentName = null;
+    currentStudentRecord = null;
+    currentDoctorName = null;
+    currentDoctorCourse = null;
+    currentCourseName = null;
+    safeStorage.removeItem('xtractor_session_token');
+
+    if (typeof axios !== 'undefined' && axios?.post) {
+        axios.post('/api/auth', { action: 'logout' }, { withCredentials: true }).catch(error => {
+            console.warn('Expired session cookie could not be cleared:', error?.message || error);
+        });
+    }
+
+    showAlert('انتهت صلاحية جلسة الدخول أو لم تعد صالحة. سجّل الدخول مرة أخرى لفتح QR.', 'error');
+}
+
 function syncLiveQrToMode() {
     if (!liveQrGeneratorActive || !currentLectureNumber) return Promise.resolve();
 
@@ -844,6 +875,10 @@ function syncLiveQrToMode() {
         }
     }).catch(error => {
         console.error('❌ Failed to sync live QR to MODE:', error);
+        if (error?.response?.status === 401) {
+            handleExpiredSession();
+            return;
+        }
         showAlert('❌ Failed to sync the live QR to attendance control.', 'error');
     }).finally(() => {
         if (liveQrSyncPromise === syncPromise) liveQrSyncPromise = null;
