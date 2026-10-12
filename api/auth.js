@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const { getFirestore } = require('../lib/firebase');
 const { SESSION_COOKIE_NAME, createSessionToken, getCookieValue } = require('../lib/session');
 const { logSecurityEvent } = require('../lib/security-logger');
@@ -13,12 +12,7 @@ const {
     isValidDeviceFingerprint,
     isValidDeviceToken
 } = require('../lib/device-policy');
-
-function safeEqual(left, right) {
-    const leftBuffer = Buffer.from(String(left || ''));
-    const rightBuffer = Buffer.from(String(right || ''));
-    return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
+const { findDoctorAccountMatches } = require('../lib/doctor-accounts');
 
 function getCookieSecurityFlags(req = null) {
     const proto = (req?.headers?.['x-forwarded-proto'] || req?.headers?.['X-Forwarded-Proto'] || '').toLowerCase();
@@ -124,17 +118,19 @@ module.exports = async function handler(req, res) {
         }
 
         const firestore = getFirestore();
-        const snapshot = await firestore
-            .collection('System_Control')
-            .doc('Xtractor Website Protection')
-            .get();
-        const expectedPassword = snapshot.exists ? snapshot.data().Dr_Pass : '';
+        const doctorAccountsSnapshot = await firestore.collection('Dr Accounts').get();
+        const matchingDoctorNames = findDoctorAccountMatches(doctorAccountsSnapshot.docs, submittedCode);
+        if (matchingDoctorNames.length > 1) {
+            logSecurityEvent('doctor_login_duplicate_password', { req, matchCount: matchingDoctorNames.length });
+            return res.status(401).json({ authenticated: false, reason: 'ambiguous_doctor_password' });
+        }
 
-        if (safeEqual(submittedCode, expectedPassword)) {
-            const token = createSessionToken({ role: 'doctor', issuedAt: Date.now() });
+        if (matchingDoctorNames.length === 1) {
+            const doctorName = matchingDoctorNames[0];
+            const token = createSessionToken({ role: 'doctor', doctorName, issuedAt: Date.now() });
             setSessionCookie(res, token, req);
-            logSecurityEvent('doctor_login_success', { req });
-            return res.json({ authenticated: true, role: 'doctor' });
+            logSecurityEvent('doctor_login_success', { req, doctorName });
+            return res.json({ authenticated: true, role: 'doctor', doctorName });
         }
 
         if (!/^[A-Za-z0-9\-_]+$/.test(submittedCode)) {

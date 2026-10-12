@@ -1234,7 +1234,7 @@ async function showStudentInterface() {
 /**
  * عرض لوحة تحكم المحاضر
  */
-function showDoctorInterface() {
+function showDoctorInterface(doctorName = '') {
     // Hide login interface
     document.getElementById('login-section').style.display = 'none';
     document.getElementById('student-section').style.display = 'none';
@@ -1244,7 +1244,7 @@ function showDoctorInterface() {
     // Show top bar
     const topBar = document.getElementById('top-bar');
     topBar.style.display = 'block';
-    document.getElementById('mode-badge').textContent = 'INSTRUCTOR MODE';
+    document.getElementById('mode-badge').textContent = doctorName || 'INSTRUCTOR MODE';
     document.getElementById('mode-badge').className = 'mode-badge doctor';
     
     // If there's a saved lecture, display it
@@ -2653,7 +2653,7 @@ async function submitStudentCode() {
         }
 
         if (authResponse.data.role === 'doctor') {
-            showDoctorInterface();
+            showDoctorInterface(authResponse.data.doctorName);
             if (signInBtn) signInBtn.disabled = false;
             return;
         }

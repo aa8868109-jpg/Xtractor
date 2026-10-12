@@ -12,6 +12,7 @@ const {
   isValidDeviceFingerprint,
   isValidDeviceToken
 } = require('../lib/device-policy');
+const { findDoctorAccountMatches } = require('../lib/doctor-accounts');
 
 const workspaceRoot = path.join(__dirname, '..');
 
@@ -121,4 +122,17 @@ test('device binding uses a random opaque cookie and stores only its hash', () =
   assert.equal(hashDeviceToken(deviceToken), deviceHash);
   assert.equal(hasDeviceIdConflict(['S-1'], 'S-2'), true);
   assert.equal(hasDeviceIdConflict(['S-2'], 'S-2'), false);
+});
+
+test('doctor authentication resolves exactly the document matching its Password field', () => {
+  const documents = [
+    { id: 'Dr Ehab Younes', data: () => ({ Password: 'secret-one' }) },
+    { id: 'Dr Other', data: () => ({ Password: 'secret-two' }) }
+  ];
+  assert.deepEqual(findDoctorAccountMatches(documents, 'secret-one'), ['Dr Ehab Younes']);
+  assert.deepEqual(findDoctorAccountMatches(documents, 'wrong-password'), []);
+  assert.deepEqual(findDoctorAccountMatches([
+    ...documents,
+    { id: 'Dr Duplicate', data: () => ({ Password: 'secret-one' }) }
+  ], 'secret-one'), ['Dr Ehab Younes', 'Dr Duplicate']);
 });
