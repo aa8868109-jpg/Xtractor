@@ -9,6 +9,7 @@ const {
   buildCourseAttendanceRecords,
   COURSE_NAMES,
   TOTAL_COURSE_LECTURES,
+  getCourseSourceFieldName,
   getCourseStorageFieldName,
   getModeActiveCourse,
   getModeCourseLecture,
