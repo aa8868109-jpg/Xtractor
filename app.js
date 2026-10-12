@@ -375,6 +375,7 @@ document.addEventListener('click', event => {
     const handlers = {
         'exit-mode': exitMode,
         'sign-in': submitStudentCode,
+        'switch-student-lecture': switchStudentLecture,
         'stop-scanner': stopScanner,
         'start-scanner': startScanner,
         'close-live-qr': closeLiveQrPage,
@@ -546,7 +547,7 @@ function startWebsiteLockMonitoring() {
 /**
  * Read the active lecture while Student Mode is enabled.
  */
-async function getSelectedLectureFromMode() {
+async function getSelectedLectureFromMode(preferredCourseName = null) {
     try {
         const record = await getModeRecord(true);
         if (!record) {
@@ -556,10 +557,15 @@ async function getSelectedLectureFromMode() {
 
         const fields = record.fields || {};
         const studentMode = fields['Student Mode'];
-        const courseName = COURSE_NAMES.find(course => {
-            const lectureValue = fields[course];
-            return lectureValue !== undefined && lectureValue !== null && lectureValue !== '';
-        }) || null;
+        const courseName = COURSE_NAMES.includes(preferredCourseName) &&
+            fields[preferredCourseName] !== undefined &&
+            fields[preferredCourseName] !== null &&
+            fields[preferredCourseName] !== ''
+            ? preferredCourseName
+            : COURSE_NAMES.find(course => {
+                const lectureValue = fields[course];
+                return lectureValue !== undefined && lectureValue !== null && lectureValue !== '';
+            }) || null;
         const lectureNum = courseName ? Number(fields[courseName]) : 0;
 
         if ((studentMode === 'ON' || studentMode === true) && lectureNum && courseName && COURSE_NAMES.includes(courseName)) {
@@ -785,7 +791,9 @@ async function updateQRSelectionDisplay() {
 }
 
 function generateLiveQrValue() {
-    const token = `XTRACTOR-${Date.now()}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 6)}`;
+    const courseIndex = COURSE_NAMES.indexOf(currentDoctorCourse);
+    if (courseIndex < 0) throw new Error('Doctor course is missing or invalid.');
+    const token = `XTRACTOR-${Date.now()}-C${courseIndex}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 6)}`;
     currentLiveQrValue = token;
     currentLiveQrExpiresAt = Date.now() + LIVE_QR_TTL_MS;
     return token;
@@ -1280,6 +1288,7 @@ async function showStudentInterface() {
     isProcessingQR = false;
     
     currentMode = 'student';
+    await refreshStudentLectureSwitcher();
     
     // 📖 قراءة الأكواد المحفوظة من Firestore وتحديث العلامات
     const tableName = `LEC_${currentLectureNumber}`;
@@ -1287,6 +1296,145 @@ async function showStudentInterface() {
     
     // 🎯 بدء مراقبة Student Mode (للتحقق من الإيقاف من قبل المحاضر)
     startStudentModeMonitoring();
+}
+
+async function refreshStudentLectureSwitcher() {
+    const switcher = document.getElementById('student-lecture-switcher');
+    const currentLabel = document.getElementById('student-current-lecture');
+    const select = document.getElementById('student-lecture-select');
+    const button = document.querySelector('[data-action="switch-student-lecture"]');
+    const status = document.getElementById('student-lecture-switch-status');
+    if (!switcher || !currentLabel || !select || !button) return;
+
+    switcher.style.display = 'block';
+    currentLabel.textContent = `${currentCourseName || 'المقرر'} — المحاضرة ${currentLectureNumber}`;
+    select.replaceChildren();
+    button.disabled = true;
+    if (status) status.textContent = 'جارٍ تحميل المحاضرات المفعّلة...';
+
+    try {
+        const modeRecord = await getModeRecord(true);
+        const fields = modeRecord?.fields || {};
+        const activeLectures = COURSE_NAMES.flatMap(courseName => {
+            const lectureNumber = Number(fields[courseName]);
+            return Number.isInteger(lectureNumber) && lectureNumber >= 1 && lectureNumber <= TOTAL_COURSE_LECTURES
+                ? [{ courseName, lectureNumber }]
+                : [];
+        });
+
+        for (const lecture of activeLectures) {
+            const option = document.createElement('option');
+            option.value = lecture.courseName;
+            option.textContent = `${lecture.courseName} — المحاضرة ${lecture.lectureNumber}`;
+            option.dataset.lectureNumber = String(lecture.lectureNumber);
+            option.selected = lecture.courseName === currentCourseName &&
+                lecture.lectureNumber === Number(currentLectureNumber);
+            select.appendChild(option);
+        }
+
+        const hasCurrentLecture = activeLectures.some(lecture =>
+            lecture.courseName === currentCourseName && lecture.lectureNumber === Number(currentLectureNumber)
+        );
+        button.disabled = activeLectures.length < 2 || !hasCurrentLecture;
+        if (status) {
+            status.textContent = activeLectures.length > 1
+                ? 'اختر محاضرة مفعّلة ثم اضغط للتبديل.'
+                : 'لا توجد محاضرات مفعّلة أخرى للتبديل.';
+        }
+    } catch (error) {
+        console.error('Could not load active student lectures:', error);
+        if (status) status.textContent = 'تعذر تحميل المحاضرات المفعّلة. حاول تحديث الصفحة.';
+    }
+}
+
+async function switchStudentLecture() {
+    const select = document.getElementById('student-lecture-select');
+    const button = document.querySelector('[data-action="switch-student-lecture"]');
+    const status = document.getElementById('student-lecture-switch-status');
+    const selectedCourse = select?.value;
+    if (!selectedCourse || !currentStudentCode || !button) return;
+
+    const selectedOption = select.selectedOptions[0];
+    const requestedLecture = Number(selectedOption?.dataset.lectureNumber);
+    if (!Number.isInteger(requestedLecture)) return;
+    if (selectedCourse === currentCourseName && requestedLecture === Number(currentLectureNumber)) {
+        if (status) status.textContent = 'هذه هي المحاضرة الحالية بالفعل.';
+        return;
+    }
+
+    button.disabled = true;
+    if (status) status.textContent = 'جارٍ التبديل...';
+    let switchedSession = false;
+    try {
+        const response = await axios.post('/api/auth', {
+            action: 'switchLecture',
+            courseName: selectedCourse
+        }, {
+            headers: getDataHeaders(),
+            withCredentials: true
+        });
+        const switched = response?.data;
+        if (switched?.authenticated !== true || switched.role !== 'student') {
+            throw new Error(switched?.reason || 'lecture_switch_failed');
+        }
+
+        if (qrScanner) stopScanner();
+        currentCourseName = switched.courseName;
+        currentLectureNumber = switched.lectureNumber;
+        switchedSession = true;
+        invalidateModeRecordCache();
+        let studentRecord = null;
+        try {
+            const studentResponse = await apiGet(
+                `/api/data/${encodeURIComponent(`LEC_${currentLectureNumber}`)}?documentId=${encodeURIComponent(currentStudentCode)}`,
+                { headers: getDataHeaders() }
+            );
+            studentRecord = studentResponse?.data?.records?.[0] || null;
+        } catch (error) {
+            console.warn('Could not reload the student record after switching lectures:', error);
+        }
+        currentStudentRecord = studentRecord || {
+            id: switched.studentRecordId,
+            fields: { Code: currentStudentCode }
+        };
+        currentStudentName = getStudentName(currentStudentRecord.fields) || currentStudentName || 'Unknown';
+        document.getElementById('student-name-display').textContent = `مرحباً بك: ${currentStudentName}`;
+        liveQrScanned = false;
+        updateQRCheckmarks();
+        await refreshStudentLectureSwitcher();
+        await loadStudentLiveQrStatus(
+            currentStudentCode,
+            currentLectureNumber,
+            `LEC_${currentLectureNumber}`,
+            studentRecord
+        );
+        if (status) status.textContent = `تم التبديل إلى ${currentCourseName} — المحاضرة ${currentLectureNumber}.`;
+    } catch (error) {
+        console.error('Could not switch student lecture:', error);
+        if (error?.response?.status === 401) {
+            handleExpiredSession();
+            return;
+        }
+        if (status) {
+            const reason = error?.response?.data?.reason;
+            status.textContent = switchedSession
+                ? 'تم تغيير الجلسة، لكن تعذر تحديث البيانات بالكامل. حدّث الصفحة.'
+                : reason === 'student_course_not_active'
+                    ? 'هذه المحاضرة لم تعد مفعّلة. حدّث الصفحة وحاول مرة أخرى.'
+                    : reason === 'student_course_record_missing' || reason === 'student_course_record_mismatch'
+                        ? 'لا يوجد سجل بهذا الكود في المحاضرة المحددة.'
+                        : 'تعذر التبديل إلى المحاضرة. حاول مرة أخرى.';
+        }
+        await refreshStudentLectureSwitcher();
+    } finally {
+        if (button.isConnected) {
+            const currentOptionIsActive = Array.from(select.options).some(option =>
+                option.value === currentCourseName &&
+                Number(option.dataset.lectureNumber) === Number(currentLectureNumber)
+            );
+            button.disabled = select.options.length < 2 || !currentOptionIsActive;
+        }
+    }
 }
 
 /**
@@ -2765,7 +2913,7 @@ async function submitStudentCode() {
         }
 
         // Step 1: Read lecture from MODE table (fast - cached)
-        const activeMode = await getSelectedLectureFromMode();
+        const activeMode = await getSelectedLectureFromMode(authResponse.data.courseName);
         const lectureNumber = activeMode?.lectureNumber;
         
         if (!lectureNumber || activeMode.courseName !== authResponse.data.courseName) {

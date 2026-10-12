@@ -16,7 +16,9 @@ const { findDoctorAccountMatches } = require('../lib/doctor-accounts');
 const {
   buildAttendanceSummary,
   buildCourseAttendanceRecords,
+  getCourseQrFieldName,
   getCourseStorageFieldName,
+  getModeCourseMap,
   normalizeCourseName
 } = require('../lib/course-policy');
 
@@ -62,14 +64,19 @@ test('cookie-authenticated writes without Origin are rejected', () => {
 });
 
 test('students can only mark their own current lecture with the active live QR', () => {
-  const liveQr = `XTRACTOR-${Date.now()}-abc12345-xy99`;
+  const liveQr = `XTRACTOR-${Date.now()}-C0-abc12345-xy99`;
   const courseName = 'مبادئ قانون';
   const request = {
     collection: 'LEC_4',
     session: { role: 'student', userCode: 'S-4', lecture: 4, courseName },
     documentId: 'S-4',
     currentRecord: { id: 'S-4', data: () => ({ Code: 'S-4' }) },
-    modeRecord: { Student_Mode: true, [courseName]: 4, QR_Selected: liveQr },
+    modeRecord: {
+      Student_Mode: true,
+      [courseName]: 4,
+      QR_Selected: liveQr,
+      [getCourseQrFieldName(courseName)]: liveQr
+    },
     fields: { [courseName]: true },
     qrToken: liveQr
   };
@@ -79,7 +86,11 @@ test('students can only mark their own current lecture with the active live QR',
   const expiredQr = `XTRACTOR-${Date.now() - 15000}-abc12345-xy99`;
   assert.equal(validateStudentPatch({
     ...request,
-    modeRecord: { ...request.modeRecord, QR_Selected: expiredQr },
+    modeRecord: {
+      ...request.modeRecord,
+      QR_Selected: expiredQr,
+      [getCourseQrFieldName(courseName)]: expiredQr
+    },
     qrToken: expiredQr
   }), 'student_expired_live_qr');
   assert.equal(validateStudentPatch({ ...request, fields: { [courseName]: true, Code: 'S-4' } }), 'student_forbidden_fields');
@@ -90,7 +101,7 @@ test('students can only mark their own current lecture with the active live QR',
 });
 
 test('per-course MODE lecture values support multiple concurrent doctor sessions', () => {
-  const liveQr = `XTRACTOR-${Date.now()}-abc12345-xy99`;
+  const liveQr = `XTRACTOR-${Date.now()}-C3-abc12345-xy99`;
   const courseName = 'إدارة أعمال';
   const request = {
     collection: 'LEC_5',
@@ -101,7 +112,8 @@ test('per-course MODE lecture values support multiple concurrent doctor sessions
       Student_Mode: true,
       'إدارة أعمال': '5',
       'مبادئ قانون': '3',
-      QR_Selected: liveQr
+      QR_Selected: liveQr,
+      [getCourseQrFieldName(courseName)]: liveQr
     },
     fields: { [courseName]: true },
     qrToken: liveQr
@@ -115,7 +127,15 @@ test('per-course MODE lecture values support multiple concurrent doctor sessions
   assert.equal(validateStudentPatch({
     ...request,
     modeRecord: { ...request.modeRecord, 'مبادئ قانون': '7' }
-  }), 'student_course_mismatch');
+  }), null);
+  assert.equal(validateStudentPatch({
+    ...request,
+    qrToken: `XTRACTOR-${Date.now()}-C0-abc12345-xy99`,
+    modeRecord: {
+      ...request.modeRecord,
+      [getCourseQrFieldName(courseName)]: `XTRACTOR-${Date.now()}-C0-abc12345-xy99`
+    }
+  }), 'student_invalid_live_qr');
 });
 
 test('CSP disallows dynamic and inline scripts and HTML has no inline handlers', () => {
@@ -193,6 +213,19 @@ test('course attendance uses one supported course field and a fifteen-lecture de
     totalLectures: 15,
     attendancePercent: 20
   });
+});
+
+test('MODE course map exposes every active course lecture and course-specific QR fields', () => {
+  assert.deepEqual(getModeCourseMap({
+    'مبادئ قانون': '2',
+    'إدارة أعمال': '5',
+    'لغة انجليزية': null
+  }), {
+    'مبادئ قانون': 2,
+    'إدارة أعمال': 5
+  });
+  assert.equal(getCourseQrFieldName('إدارة أعمال'), 'QR_Selected_إدارة_أعمال');
+  assert.equal(getCourseQrFieldName('غير معروف'), null);
 });
 
 test('course summary counts each lecture once and reports current lecture source', () => {

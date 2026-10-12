@@ -482,6 +482,38 @@
             font-size: 14px;
             font-weight: 500;
             color: var(--accent);
+        }
+
+        .student-lecture-switcher {
+            background: var(--ink-3);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px 18px;
+            margin-bottom: 20px;
+        }
+
+        .student-lecture-current {
+            color: var(--accent);
+            font-weight: 700;
+            margin-bottom: 12px;
+        }
+
+        .student-lecture-switcher label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        .student-lecture-switcher button {
+            margin-top: 10px;
+        }
+
+        #student-lecture-switch-status {
+            min-height: 18px;
+            margin-top: 8px;
+            color: var(--text-secondary);
+            font-size: 12px;
             letter-spacing: 0.04em;
         }
 
@@ -1249,6 +1281,15 @@
             <div id="student-section" style="display: none;">
                 <div class="student-name-display">
                     <h2 id="student-name-display">Welcome —</h2>
+                </div>
+
+                <div id="student-lecture-switcher" class="student-lecture-switcher" style="display:none;">
+                    <div class="section-label">المحاضرة الحالية</div>
+                    <div id="student-current-lecture" class="student-lecture-current"></div>
+                    <label for="student-lecture-select">المحاضرات المفعّلة المتاحة</label>
+                    <select id="student-lecture-select" aria-label="اختر المحاضرة"></select>
+                    <button type="button" data-action="switch-student-lecture">التبديل إلى المحاضرة</button>
+                    <div id="student-lecture-switch-status" aria-live="polite"></div>
                 </div>
 
                 <div id="location-status" class="location-status loading" style="display:none;">

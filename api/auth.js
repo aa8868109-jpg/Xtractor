@@ -1,5 +1,5 @@
 const { getFirestore } = require('../lib/firebase');
-const { SESSION_COOKIE_NAME, createSessionToken, getCookieValue } = require('../lib/session');
+const { SESSION_COOKIE_NAME, createSessionToken, getCookieValue, validateSessionToken } = require('../lib/session');
 const { logSecurityEvent } = require('../lib/security-logger');
 const { checkRateLimit } = require('../lib/rate-limit');
 const { enforceSameOrigin } = require('../lib/request-security');
@@ -13,7 +13,7 @@ const {
     isValidDeviceToken
 } = require('../lib/device-policy');
 const { findDoctorAccountMatches } = require('../lib/doctor-accounts');
-const { getCourseStorageFieldName, getModeActiveCourse, getModeCourseLecture, hasAnyActiveCourseLecture, normalizeCourseName } = require('../lib/course-policy');
+const { getCourseStorageFieldName, getModeCourseLecture, getModeCourseMap, hasAnyActiveCourseLecture, normalizeCourseName } = require('../lib/course-policy');
 
 function getCookieSecurityFlags(req = null) {
     const proto = (req?.headers?.['x-forwarded-proto'] || req?.headers?.['X-Forwarded-Proto'] || '').toLowerCase();
@@ -112,6 +112,68 @@ module.exports = async function handler(req, res) {
     }
 
     try {
+        if (req.body?.action === 'switchLecture') {
+            const session = validateSessionToken(req);
+            if (!session) {
+                return res.status(401).json({ authenticated: false, reason: 'unauthorized' });
+            }
+            if (session.role !== 'student') {
+                return res.status(403).json({ authenticated: false, reason: 'student_session_required' });
+            }
+
+            const courseName = normalizeCourseName(req.body?.courseName);
+            if (!courseName) {
+                return res.status(400).json({ authenticated: false, reason: 'invalid_course' });
+            }
+
+            const firestore = getFirestore();
+            const modeSnap = await firestore.collection('MODE').doc('Website Status').get();
+            const modeData = modeSnap.exists ? modeSnap.data() || {} : {};
+            const lectureNumber = getModeCourseLecture(modeData, courseName);
+            const isModeEnabled = modeData.Student_Mode === true ||
+                String(modeData.Student_Mode || '').toLowerCase() === 'on' ||
+                hasAnyActiveCourseLecture(modeData);
+            if (!isModeEnabled || !lectureNumber) {
+                return res.status(403).json({ authenticated: false, reason: 'student_course_not_active' });
+            }
+
+            const userCode = String(session.userCode || '').trim();
+            const studentDoc = await findStudentDocument(firestore.collection(`LEC_${lectureNumber}`), userCode);
+            if (!studentDoc) {
+                return res.status(403).json({ authenticated: false, reason: 'student_course_record_missing' });
+            }
+            const studentData = studentDoc.data() || {};
+            const recordCode = String(
+                studentData.Code ??
+                studentData.code ??
+                studentData['Student Code'] ??
+                studentData.studentCode ??
+                studentData.StudentCode ??
+                studentDoc.id ??
+                ''
+            ).trim();
+            if (!userCode || recordCode !== userCode) {
+                return res.status(403).json({ authenticated: false, reason: 'student_course_record_mismatch' });
+            }
+
+            const token = createSessionToken({
+                role: 'student',
+                userCode,
+                lecture: lectureNumber,
+                courseName,
+                issuedAt: Date.now()
+            });
+            setSessionCookie(res, token, req);
+            logSecurityEvent('student_lecture_switched', { req, lectureNumber });
+            return res.json({
+                authenticated: true,
+                role: 'student',
+                courseName,
+                lectureNumber,
+                studentRecordId: studentDoc.id
+            });
+        }
+
         const submittedCode = String(req.body?.code || '').trim();
         if (!submittedCode || submittedCode.length > 128 || /[\u0000-\u001F\u007F]/.test(submittedCode)) {
             logSecurityEvent('invalid_auth_input', { req, submittedCodeLength: submittedCode.length });
@@ -145,22 +207,38 @@ module.exports = async function handler(req, res) {
 
         const modeSnap = await firestore.collection('MODE').doc('Website Status').get();
         const modeData = modeSnap.exists ? modeSnap.data() : {};
-        const activeCourseName = getModeActiveCourse(modeData);
-        const lectureNumber = activeCourseName ? getModeCourseLecture(modeData, activeCourseName) || 0 : 0;
+        const activeCourses = Object.entries(getModeCourseMap(modeData))
+            .sort(([, lectureA], [, lectureB]) => lectureB - lectureA);
         const isModeEnabled = modeData.Student_Mode === true || String(modeData.Student_Mode || '').toLowerCase() === 'on' || hasAnyActiveCourseLecture(modeData);
-        const courseName = activeCourseName;
-        const courseField = getCourseStorageFieldName(courseName);
 
-        if (!lectureNumber || !isModeEnabled || !courseName || !courseField) {
-            logSecurityEvent('student_login_disabled', { req, lectureNumber, isModeEnabled, courseConfigured: Boolean(courseName) });
+        if (!isModeEnabled || activeCourses.length === 0) {
+            logSecurityEvent('student_login_disabled', { req, isModeEnabled, activeCourseCount: activeCourses.length });
             return res.status(401).json({ authenticated: false, reason: 'student_mode_disabled' });
         }
 
-        const lectureRef = firestore.collection(`LEC_${lectureNumber}`);
-        const studentDoc = await findStudentDocument(lectureRef, submittedCode);
+        let courseName = null;
+        let lectureNumber = 0;
+        let lectureRef = null;
+        let studentDoc = null;
+        for (const [candidateCourse, candidateLecture] of activeCourses) {
+            const candidateRef = firestore.collection(`LEC_${candidateLecture}`);
+            const candidateStudent = await findStudentDocument(candidateRef, submittedCode);
+            if (!candidateStudent) continue;
+            courseName = candidateCourse;
+            lectureNumber = candidateLecture;
+            lectureRef = candidateRef;
+            studentDoc = candidateStudent;
+            break;
+        }
+
         if (!studentDoc) {
-            logSecurityEvent('student_login_failed', { req, lectureNumber });
+            logSecurityEvent('student_login_failed', { req, activeCourseCount: activeCourses.length });
             return res.status(401).json({ authenticated: false, reason: 'student_not_found' });
+        }
+        const courseField = getCourseStorageFieldName(courseName);
+        if (!courseField) {
+            logSecurityEvent('student_login_course_missing', { req, lectureNumber });
+            return res.status(401).json({ authenticated: false, reason: 'student_mode_disabled' });
         }
 
         const clientIp = getClientIp(req);

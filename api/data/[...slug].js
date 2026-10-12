@@ -9,6 +9,7 @@ const {
   buildCourseAttendanceRecords,
   COURSE_NAMES,
   TOTAL_COURSE_LECTURES,
+  getCourseQrFieldName,
   getCourseSourceFieldName,
   getCourseStorageFieldName,
   getModeActiveCourse,
@@ -273,9 +274,12 @@ module.exports = async function handler(req, res) {
         const snap = await ref.get();
         if (!snap.exists) return res.status(404).json({ error: 'mode_not_found' });
         const data = snap.data() || {};
+        const activeCourse = getModeActiveCourse(data);
+        const courseQrField = getCourseQrFieldName(session.courseName);
+        const courseQr = courseQrField ? data[courseQrField] : null;
         const fields = {
           'Student Mode': (data.Student_Mode === true || String(data.Student_Mode || '').toLowerCase() === 'on' || hasAnyActiveCourseLecture(data)) ? 'ON' : 'OFF',
-          'QR Selected': data.QR_Selected || 'NONE',
+          'QR Selected': courseQr || (activeCourse === session.courseName ? data.QR_Selected : null) || 'NONE',
           Name: data.Name || 'Website Status'
         };
         for (const courseName of COURSE_NAMES) {
@@ -298,6 +302,9 @@ module.exports = async function handler(req, res) {
       const sourceFields = sanitizeFields(req.body?.fields || req.body || {});
       const updates = {};
       const doctorCourse = normalizeCourseName(session.courseName);
+      if (!doctorCourse) {
+        return res.status(403).json({ error: 'doctor_course_not_configured' });
+      }
       if (sourceFields['Student Mode'] !== undefined) {
         updates.Student_Mode = sourceFields['Student Mode'] === 'ON' || sourceFields['Student Mode'] === true;
       }
@@ -313,12 +320,9 @@ module.exports = async function handler(req, res) {
           return res.status(400).json({ error: 'invalid_live_qr' });
         }
         updates.QR_Selected = selectedQr;
+        updates[getCourseQrFieldName(doctorCourse)] = selectedQr;
       }
       if (sourceFields.Name !== undefined) updates.Name = String(sourceFields.Name).slice(0, 200);
-
-      if (!doctorCourse) {
-        return res.status(403).json({ error: 'doctor_course_not_configured' });
-      }
 
       if (sourceFields[doctorCourse] !== undefined) {
         const lectureValue = Number(sourceFields[doctorCourse]);
@@ -335,9 +339,13 @@ module.exports = async function handler(req, res) {
       await ref.set(updates, { merge: true });
       const snap = await ref.get();
       const data = snap.data() || {};
+      const courseQrField = getCourseQrFieldName(doctorCourse);
+      const activeCourse = getModeActiveCourse(data);
       const responseFields = {
         'Student Mode': (data.Student_Mode === true || String(data.Student_Mode || '').toLowerCase() === 'on' || hasAnyActiveCourseLecture(data)) ? 'ON' : 'OFF',
-        'QR Selected': data.QR_Selected || 'NONE',
+        'QR Selected': (courseQrField ? data[courseQrField] : null) ||
+          (activeCourse === doctorCourse ? data.QR_Selected : null) ||
+          'NONE',
         Name: data.Name || 'Website Status'
       };
       for (const courseName of COURSE_NAMES) {
