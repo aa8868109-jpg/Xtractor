@@ -85,17 +85,21 @@ test('doctor tabs select independent course-scoped sessions', () => {
   const cookies = `${economicsCookie}=${encodeURIComponent(economicsToken)}; ${accountingCookie}=${encodeURIComponent(accountingToken)}`;
 
   const economicsSession = validateSessionToken({
-    headers: { cookie: cookies, 'x-xtractor-session-course': economics }
+    headers: { cookie: cookies, 'x-xtractor-session-course': String(COURSE_NAMES.indexOf(economics)) }
   });
   const accountingSession = validateSessionToken({
-    headers: { cookie: cookies, 'x-xtractor-session-course': accounting }
+    headers: { cookie: cookies, 'x-xtractor-session-course': String(COURSE_NAMES.indexOf(accounting)) }
   });
   const mismatchedSession = validateSessionToken({
-    headers: { cookie: cookies, 'x-xtractor-session-course': 'مبادئ قانون' }
+    headers: { cookie: cookies, 'x-xtractor-session-course': String(COURSE_NAMES.indexOf('مبادئ قانون')) }
+  });
+  const invalidSession = validateSessionToken({
+    headers: { cookie: cookies, 'x-xtractor-session-course': '999' }
   });
 
   assert.equal(economicsSession?.courseName, economics);
   assert.equal(accountingSession?.courseName, accounting);
   assert.equal(mismatchedSession, null);
+  assert.equal(invalidSession, null);
   assert.notEqual(economicsCookie, accountingCookie);
 });

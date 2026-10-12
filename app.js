@@ -1610,7 +1610,7 @@ function getDataHeaders() {
     return {
         'Content-Type': 'application/json',
         ...(currentMode === 'doctor' && currentDoctorCourse
-            ? { 'X-Xtractor-Session-Course': currentDoctorCourse }
+            ? { 'X-Xtractor-Session-Course': String(COURSE_NAMES.indexOf(currentDoctorCourse)) }
             : {}),
         ...(fingerprint ? { 'X-Device-Fingerprint': fingerprint } : {})
     };
