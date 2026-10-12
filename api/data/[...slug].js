@@ -188,6 +188,8 @@ function resolveStudentLocation(value) {
 }
 
 module.exports = async function handler(req, res) {
+  let phase = 'request_validation';
+  const requestId = req.headers?.['x-vercel-id'] || req.headers?.['x-request-id'] || null;
   try {
     if (!enforceSameOrigin(req, res)) return;
     if (!checkRateLimit(req, res, { endpoint: 'data', maxRequests: 120, windowMs: 60000 })) return;
@@ -195,6 +197,7 @@ module.exports = async function handler(req, res) {
     const session = requireSession(req, res);
     if (!session) return;
 
+    phase = 'firestore_initialization';
     const firestore = getFirestore();
     const parts = getParts(req);
     if (parts.length < 1) return res.status(400).json({ error: 'invalid_data_path' });
@@ -447,11 +450,20 @@ module.exports = async function handler(req, res) {
       const fields = sanitizeFields(req.body?.fields || req.body || {});
 
       if (session.role === 'student') {
+        phase = 'student_record_read';
         const current = await ref.doc(documentId).get();
         if (!current.exists) return res.status(404).json({ error: 'record_not_found' });
 
-        const modeSnap = await firestore.collection('MODE').doc('Website Status').get();
-        const modeRecord = modeSnap.exists ? modeSnap.data() : {};
+        const courseName = normalizeCourseName(session.courseName);
+        const isAttendanceUpdate = Boolean(courseName && fields[courseName] !== undefined);
+        let modeRecord = {};
+        if (isAttendanceUpdate) {
+          phase = 'attendance_mode_read';
+          const modeSnap = await firestore.collection('MODE').doc('Website Status').get();
+          modeRecord = modeSnap.exists ? modeSnap.data() : {};
+        }
+
+        phase = 'student_patch_validation';
         const policyError = validateStudentPatch({
           collection,
           session,
@@ -465,7 +477,6 @@ module.exports = async function handler(req, res) {
           return res.status(policyError === 'student_invalid_location' ? 400 : 403).json({ error: policyError });
         }
 
-        const courseName = normalizeCourseName(session.courseName);
         const courseSourceField = getCourseSourceFieldName(courseName);
         const updates = {};
         if (fields[courseName] === true) {
@@ -473,12 +484,15 @@ module.exports = async function handler(req, res) {
           updates[courseSourceField] = 'student';
         }
         if (fields.Location !== undefined) {
+          phase = 'student_location_validation';
           const location = resolveStudentLocation(fields.Location);
           if (!location) return res.status(400).json({ error: 'student_invalid_location' });
           updates.Location = location.location;
           updates.Region = location.region;
         }
+        phase = 'student_record_write';
         await ref.doc(documentId).set(toFirestore(updates), { merge: true });
+        phase = 'student_record_response_read';
         return res.json(toRecord(await ref.doc(documentId).get(), collection, session.role));
       }
 
@@ -509,7 +523,13 @@ module.exports = async function handler(req, res) {
 
     return res.status(405).json({ error: 'method_not_allowed' });
   } catch (error) {
-    console.error('Data handler error:', error.message || error);
+    console.error('Data handler error:', {
+      phase,
+      requestId,
+      message: error instanceof Error ? error.message : String(error),
+      code: error?.code || null,
+      stack: error instanceof Error ? error.stack : null
+    });
     return res.status(500).json({ error: 'data_handler_error' });
   }
 };
