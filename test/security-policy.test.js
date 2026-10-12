@@ -84,7 +84,7 @@ test('students can only mark their own current lecture with the active live QR',
 
   assert.equal(validateStudentPatch(request), null);
   assert.equal(validateStudentPatch({ ...request, qrToken: 'XTRACTOR-1234567890123-abc12345-xy99' }), 'student_invalid_live_qr');
-  const expiredQr = `XTRACTOR-${Date.now() - 15000}-abc12345-xy99`;
+  const expiredQr = `XTRACTOR-${Date.now() - 25000}-abc12345-xy99`;
   assert.equal(validateStudentPatch({
     ...request,
     modeRecord: {

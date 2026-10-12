@@ -22,6 +22,7 @@ const {
 
 const ATTENDANCE_SUMMARY_CACHE_TTL_MS = 20000;
 const attendanceSummaryCache = new Map();
+const attendanceSummaryInFlight = new Map();
 
 function requireSession(req, res) {
   const session = validateSessionToken(req);
@@ -195,10 +196,19 @@ module.exports = async function handler(req, res) {
   const requestId = req.headers?.['x-vercel-id'] || req.headers?.['x-request-id'] || null;
   try {
     if (!enforceSameOrigin(req, res)) return;
-    if (!checkRateLimit(req, res, { endpoint: 'data', maxRequests: 120, windowMs: 60000 })) return;
+    if (!checkRateLimit(req, res, { endpoint: 'data-ip', maxRequests: 3000, windowMs: 60000 })) return;
 
     const session = requireSession(req, res);
     if (!session) return;
+    const requestIdentity = session.role === 'student'
+      ? session.userCode
+      : `${session.courseName || ''}:${session.doctorName || ''}`;
+    if (!checkRateLimit(req, res, {
+      endpoint: 'data-session',
+      identity: `${session.role}:${requestIdentity}`,
+      maxRequests: session.role === 'doctor' ? 300 : 180,
+      windowMs: 60000
+    })) return;
 
     phase = 'firestore_initialization';
     const firestore = getFirestore();
@@ -233,33 +243,46 @@ module.exports = async function handler(req, res) {
         return res.json(cached.payload);
       }
 
-      const lectureData = await Promise.all(Array.from({ length: TOTAL_COURSE_LECTURES }, async (_, index) => {
-        const lectureNumber = index + 1;
-        const lectureRef = firestore.collection(`LEC_${lectureNumber}`);
-        const querySnapshots = await Promise.all([
-          lectureRef.where(courseStorageField, '==', true).get(),
-          courseStorageField === courseName ? Promise.resolve(null) : lectureRef.where(courseName, '==', true).get()
-        ]);
-        const docs = new Map();
-        for (const snapshot of querySnapshots) {
-          if (!snapshot) continue;
-          for (const doc of snapshot.docs) docs.set(doc.id, doc);
-        }
-        return {
-          lectureNumber,
-          records: Array.from(docs.values()).map(doc => ({ id: doc.id, fields: doc.data() || {} }))
-        };
-      }));
+      let summaryPromise = attendanceSummaryInFlight.get(cacheKey);
+      if (!summaryPromise) {
+        summaryPromise = (async () => {
+          const lectureData = await Promise.all(Array.from({ length: TOTAL_COURSE_LECTURES }, async (_, index) => {
+            const lectureNumber = index + 1;
+            const lectureRef = firestore.collection(`LEC_${lectureNumber}`);
+            const querySnapshots = await Promise.all([
+              lectureRef.where(courseStorageField, '==', true).get(),
+              courseStorageField === courseName ? Promise.resolve(null) : lectureRef.where(courseName, '==', true).get()
+            ]);
+            const docs = new Map();
+            for (const snapshot of querySnapshots) {
+              if (!snapshot) continue;
+              for (const doc of snapshot.docs) docs.set(doc.id, doc);
+            }
+            return {
+              lectureNumber,
+              records: Array.from(docs.values()).map(doc => ({ id: doc.id, fields: doc.data() || {} }))
+            };
+          }));
 
-      const records = buildCourseAttendanceRecords(lectureData, courseName, requestedLecture);
-      const payload = {
-        courseName,
-        lectureNumber: requestedLecture,
-        totalLectures: TOTAL_COURSE_LECTURES,
-        records
-      };
-      attendanceSummaryCache.set(cacheKey, { timestamp: Date.now(), payload });
-      return res.json(payload);
+          return {
+            courseName,
+            lectureNumber: requestedLecture,
+            totalLectures: TOTAL_COURSE_LECTURES,
+            records: buildCourseAttendanceRecords(lectureData, courseName, requestedLecture)
+          };
+        })();
+        attendanceSummaryInFlight.set(cacheKey, summaryPromise);
+      }
+
+      try {
+        const payload = await summaryPromise;
+        attendanceSummaryCache.set(cacheKey, { timestamp: Date.now(), payload });
+        return res.json(payload);
+      } finally {
+        if (attendanceSummaryInFlight.get(cacheKey) === summaryPromise) {
+          attendanceSummaryInFlight.delete(cacheKey);
+        }
+      }
     }
 
     if (collection === 'MODE') {
@@ -324,23 +347,7 @@ module.exports = async function handler(req, res) {
       Object.assign(updates, buildCourseModeUpdates(doctorCourse, sourceFields));
 
       await ref.set(updates, { merge: true });
-      const snap = await ref.get();
-      const data = snap.data() || {};
-      const courseQrField = getCourseQrFieldName(doctorCourse);
-      const activeCourse = getModeActiveCourse(data);
-      const activeCourseCount = Object.keys(getModeCourseMap(data)).length;
-      const responseFields = {
-        'Student Mode': hasAnyActiveCourseLecture(data) ? 'ON' : 'OFF',
-        'QR Selected': (courseQrField ? data[courseQrField] : null) ||
-          (activeCourseCount === 1 && activeCourse === doctorCourse ? data.QR_Selected : null) ||
-          'NONE',
-        Name: data.Name || 'Website Status'
-      };
-      for (const courseName of COURSE_NAMES) {
-        const keyValue = getModeCourseLecture(data, courseName);
-        responseFields[courseName] = keyValue !== null ? String(keyValue) : null;
-      }
-      return res.json({ records: [{ id: snap.id, fields: responseFields }] });
+      return res.json({ success: true });
     }
 
     if (!/^LEC_\d+$/i.test(collection)) return res.status(404).json({ error: 'collection_not_found' });

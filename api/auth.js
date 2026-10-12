@@ -100,7 +100,7 @@ async function findStudentDocument(lectureRef, submittedCode) {
 
 module.exports = async function handler(req, res) {
     if (!enforceSameOrigin(req, res)) return;
-    if (!checkRateLimit(req, res, { endpoint: 'auth', maxRequests: 10, windowMs: 60000 })) return;
+    if (!checkRateLimit(req, res, { endpoint: 'auth-ip', maxRequests: 600, windowMs: 60000 })) return;
 
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'method_not_allowed' });
@@ -204,6 +204,12 @@ module.exports = async function handler(req, res) {
             logSecurityEvent('student_login_invalid_format', { req, submittedCodeLength: submittedCode.length });
             return res.status(401).json({ authenticated: false, reason: 'invalid_format' });
         }
+        if (!checkRateLimit(req, res, {
+            endpoint: 'student-login-code',
+            identity: submittedCode.toLowerCase(),
+            maxRequests: 6,
+            windowMs: 60000
+        })) return;
 
         const modeSnap = await firestore.collection('MODE').doc('Website Status').get();
         const modeData = modeSnap.exists ? modeSnap.data() : {};

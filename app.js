@@ -30,8 +30,8 @@ let lockLink = '';
 
 // ====== QR Handling ======
 const LIVE_QR_PREFIX = 'XTRACTOR-';
-const LIVE_QR_INTERVAL_MS = 5000;
-const LIVE_QR_TTL_MS = 5000;
+const LIVE_QR_INTERVAL_MS = 10000;
+const LIVE_QR_TTL_MS = 10000;
 let liveQrTimer = null;
 let liveQrGeneratorActive = false;
 let liveQrSyncPromise = null;
@@ -149,7 +149,7 @@ async function apiGet(url, config = {}) {
     const now = Date.now();
     const waitMs = Math.max(0, minInterval - (now - last));
 
-    const promise = (waitMs > 0 ? new Promise(r => setTimeout(r, waitMs)) : Promise.resolve()).then(async () => {
+    const requestPromise = (waitMs > 0 ? new Promise(r => setTimeout(r, waitMs)) : Promise.resolve()).then(async () => {
         if (typeof axios !== 'undefined' && axios && axios.get) {
             try {
                 const resp = await axios.get(url, config);
@@ -182,6 +182,11 @@ async function apiGet(url, config = {}) {
             headers: {
                 ...(config.headers || {}),
                 Accept: 'application/json'
+            }
+        });
+        const promise = requestPromise.finally(() => {
+            if (_inFlightRequests.get(key) === promise) {
+                _inFlightRequests.delete(key);
             }
         });
 
@@ -2391,6 +2396,7 @@ function startLectureStudentUpdates() {
         }
 
         try {
+            window._lastData429 = false;
             await updateStudentsList();
             // if last fetch had 429 marker, increase backoff
             if (window._lastData429) {
