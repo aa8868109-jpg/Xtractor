@@ -532,7 +532,7 @@ function startWebsiteLockMonitoring() {
 // ====== وظائف حماية الجهاز (Device IP) ======
 
 /**
- * قراءة المحاضرة المختارة من جدول MODE (والتحقق من أن QR محدد)
+ * Read the active lecture while Student Mode is enabled.
  */
 async function getSelectedLectureFromMode() {
     try {
@@ -544,12 +544,11 @@ async function getSelectedLectureFromMode() {
 
         const lectureNum = record.fields?.Lecture;
         const studentMode = record.fields?.['Student Mode'];
-        const qrSelected = record.fields?.['QR Selected'] || 'NONE';
-        if ((studentMode === 'ON' || studentMode === true) && lectureNum && qrSelected !== 'NONE') {
+        if ((studentMode === 'ON' || studentMode === true) && lectureNum) {
             return parseInt(lectureNum, 10);
         }
 
-        console.warn('⚠️ Student mode is disabled or no lecture/QR is selected');
+        console.warn('⚠️ Student mode is disabled or no lecture is selected');
         return null;
     } catch (error) {
         console.error('❌ خطأ في قراءة جدول MODE:', error);
