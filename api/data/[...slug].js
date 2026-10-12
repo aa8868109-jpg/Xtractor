@@ -5,6 +5,15 @@ const { checkRateLimit } = require('../../lib/rate-limit');
 const { enforceSameOrigin } = require('../../lib/request-security');
 const { validateStudentPatch } = require('../../lib/data-policy');
 const { isValidDeviceFingerprint } = require('../../lib/device-policy');
+const {
+  buildCourseAttendanceRecords,
+  TOTAL_COURSE_LECTURES,
+  getCourseStorageFieldName,
+  normalizeCourseName
+} = require('../../lib/course-policy');
+
+const ATTENDANCE_SUMMARY_CACHE_TTL_MS = 20000;
+const attendanceSummaryCache = new Map();
 
 function requireSession(req, res) {
   const session = validateSessionToken(req);
@@ -56,8 +65,7 @@ function toRecord(doc, collection = '', role = 'doctor') {
   for (const [key, value] of Object.entries(data)) {
     if (role === 'student' && ['Device_Fingerprint', 'Device Fingerprint', 'deviceFingerprint', 'Device_Id_Hash'].includes(key)) continue;
     const canonicalKey = canonicalizeNameKey(key);
-    if (key === 'Qr_Live') fields.Qr_Live = value;
-    else if (key === 'Device_ip') fields['Device IP'] = value;
+    if (key === 'Device_ip') fields['Device IP'] = value;
     else if (canonicalKey === 'name') {
       if (!fields.name || !String(fields.name).trim()) fields.name = value;
     } else {
@@ -124,8 +132,7 @@ function toFirestore(fields) {
       result.name = String(value).trim();
       continue;
     }
-    if (key === 'Qr_Live') result.Qr_Live = value;
-    else if (key === 'Device IP' || key === 'Device_IP') result.Device_ip = value;
+    if (key === 'Device IP' || key === 'Device_IP') result.Device_ip = value;
     else if (key === 'Code' || key === 'code') {
       result.Code = value;
     } else result[key.replace(/\s+/g, '_')] = value;
@@ -189,12 +196,59 @@ module.exports = async function handler(req, res) {
     const collection = parts[0];
     const documentId = parts[1] || req.query?.documentId || req.body?.documentId || req.body?.id || req.body?.recordId || null;
     const method = (req.method || 'GET').toUpperCase();
+    const params = new URL(req.url || '/', 'http://localhost').searchParams;
 
     if (collection === 'Protection') {
       const snap = await firestore.collection('System_Control').doc('Xtractor Website Protection').get();
       if (!snap.exists) return res.status(404).json({ error: 'protection_not_found' });
       const data = snap.data();
       return res.json({ records: [{ id: snap.id, fields: { Select: data.Website_Status ? 'Unlock' : 'Lock', Text: data.Text || '', Link: data.Link || '' } }] });
+    }
+
+    if (collection === 'AttendanceSummary') {
+      if (method !== 'GET') return res.status(405).json({ error: 'method_not_allowed' });
+      if (session.role !== 'doctor') return res.status(403).json({ error: 'forbidden' });
+
+      const courseName = normalizeCourseName(session.courseName);
+      const courseStorageField = getCourseStorageFieldName(courseName);
+      const requestedLecture = Number(params.get('lecture'));
+      if (!courseName || !courseStorageField || !Number.isInteger(requestedLecture) || requestedLecture < 1 || requestedLecture > TOTAL_COURSE_LECTURES) {
+        return res.status(400).json({ error: 'invalid_attendance_summary_request' });
+      }
+
+      const cacheKey = `${courseName}:${requestedLecture}`;
+      const cached = attendanceSummaryCache.get(cacheKey);
+      if (params.get('refresh') !== '1' && cached && Date.now() - cached.timestamp < ATTENDANCE_SUMMARY_CACHE_TTL_MS) {
+        return res.json(cached.payload);
+      }
+
+      const lectureData = await Promise.all(Array.from({ length: TOTAL_COURSE_LECTURES }, async (_, index) => {
+        const lectureNumber = index + 1;
+        const lectureRef = firestore.collection(`LEC_${lectureNumber}`);
+        const querySnapshots = await Promise.all([
+          lectureRef.where(courseStorageField, '==', true).get(),
+          courseStorageField === courseName ? Promise.resolve(null) : lectureRef.where(courseName, '==', true).get()
+        ]);
+        const docs = new Map();
+        for (const snapshot of querySnapshots) {
+          if (!snapshot) continue;
+          for (const doc of snapshot.docs) docs.set(doc.id, doc);
+        }
+        return {
+          lectureNumber,
+          records: Array.from(docs.values()).map(doc => ({ id: doc.id, fields: doc.data() || {} }))
+        };
+      }));
+
+      const records = buildCourseAttendanceRecords(lectureData, courseName, requestedLecture);
+      const payload = {
+        courseName,
+        lectureNumber: requestedLecture,
+        totalLectures: TOTAL_COURSE_LECTURES,
+        records
+      };
+      attendanceSummaryCache.set(cacheKey, { timestamp: Date.now(), payload });
+      return res.json(payload);
     }
 
     if (collection === 'MODE') {
@@ -210,7 +264,7 @@ module.exports = async function handler(req, res) {
         const snap = await ref.get();
         if (!snap.exists) return res.status(404).json({ error: 'mode_not_found' });
         const data = snap.data();
-        return res.json({ records: [{ id: snap.id, fields: { 'Student Mode': data.Student_Mode === true ? 'ON' : 'OFF', Lecture: data.Lecture || null, 'QR Selected': data.QR_Selected || 'NONE', Name: data.Name || 'Website Status' } }] });
+        return res.json({ records: [{ id: snap.id, fields: { 'Student Mode': data.Student_Mode === true ? 'ON' : 'OFF', Lecture: data.Lecture || null, 'QR Selected': data.QR_Selected || 'NONE', 'Course Name': data.Course_Name || data['Course Name'] || null, Name: data.Name || 'Website Status' } }] });
       }
 
       if (method === 'POST' || method === 'PATCH' || method === 'PUT') {
@@ -225,8 +279,20 @@ module.exports = async function handler(req, res) {
 
       const sourceFields = sanitizeFields(req.body?.fields || req.body || {});
       const updates = {};
+      const doctorCourse = normalizeCourseName(session.courseName);
       if (sourceFields['Student Mode'] !== undefined) updates.Student_Mode = sourceFields['Student Mode'] === 'ON' || sourceFields['Student Mode'] === true;
       if (sourceFields.Lecture !== undefined) updates.Lecture = Number(sourceFields.Lecture) || null;
+      if (sourceFields['Course Name'] !== undefined) {
+        const courseName = normalizeCourseName(sourceFields['Course Name']);
+        if (!courseName || !doctorCourse || courseName !== doctorCourse) {
+          return res.status(403).json({ error: 'doctor_course_mismatch' });
+        }
+        updates.Course_Name = courseName;
+      }
+      if (sourceFields['Student Mode'] !== undefined || sourceFields.Lecture !== undefined || sourceFields['QR Selected'] !== undefined) {
+        if (!doctorCourse) return res.status(403).json({ error: 'doctor_course_not_configured' });
+        updates.Course_Name = doctorCourse;
+      }
       if (sourceFields['QR Selected'] !== undefined) {
         const selectedQr = sourceFields['QR Selected'] || 'NONE';
         if (selectedQr !== 'NONE' && (typeof selectedQr !== 'string' || !/^XTRACTOR-[A-Za-z0-9-]{12,120}$/.test(selectedQr))) {
@@ -238,13 +304,12 @@ module.exports = async function handler(req, res) {
       await ref.set(updates, { merge: true });
       const snap = await ref.get();
       const data = snap.data();
-      return res.json({ records: [{ id: snap.id, fields: { 'Student Mode': data.Student_Mode === true ? 'ON' : 'OFF', Lecture: data.Lecture || null, 'QR Selected': data.QR_Selected || 'NONE', Name: data.Name || 'Website Status' } }] });
+      return res.json({ records: [{ id: snap.id, fields: { 'Student Mode': data.Student_Mode === true ? 'ON' : 'OFF', Lecture: data.Lecture || null, 'QR Selected': data.QR_Selected || 'NONE', 'Course Name': data.Course_Name || data['Course Name'] || null, Name: data.Name || 'Website Status' } }] });
     }
 
     if (!/^LEC_\d+$/i.test(collection)) return res.status(404).json({ error: 'collection_not_found' });
 
     const ref = firestore.collection(collection);
-    const params = new URL(req.url || '/', 'http://localhost').searchParams;
     const formula = params.get('filterByFormula') || '';
     const match = formula.match(/^\{([^}]+)\}='([^']*)'$/) || formula.match(/^\(\{([^}]+)\}='([^']*)'\)$/);
 
@@ -364,10 +429,12 @@ module.exports = async function handler(req, res) {
           return res.status(policyError === 'student_invalid_location' ? 400 : 403).json({ error: policyError });
         }
 
+        const courseName = normalizeCourseName(session.courseName);
+        const courseSourceField = getCourseSourceFieldName(courseName);
         const updates = {};
-        if (fields.Qr_Live === true) {
-          updates.Qr_Live = true;
-          updates.Qr_Live_Source = 'student';
+        if (fields[courseName] === true) {
+          updates[courseName] = true;
+          updates[courseSourceField] = 'student';
         }
         if (fields.Location !== undefined) {
           const location = resolveStudentLocation(fields.Location);
@@ -375,7 +442,7 @@ module.exports = async function handler(req, res) {
           updates.Location = location.location;
           updates.Region = location.region;
         }
-        await ref.doc(documentId).set(updates, { merge: true });
+        await ref.doc(documentId).set(toFirestore(updates), { merge: true });
         return res.json(toRecord(await ref.doc(documentId).get(), collection, session.role));
       }
 

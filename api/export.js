@@ -3,6 +3,7 @@ const { validateSessionToken } = require('../lib/session');
 const { checkRateLimit } = require('../lib/rate-limit');
 const { enforceSameOrigin } = require('../lib/request-security');
 const { createMultipleLecturesWorkbook, createSingleLectureWorkbook } = require('../lib/export-workbook');
+const { getCourseStorageFieldName, normalizeCourseName } = require('../lib/course-policy');
 
 function getStudentCode(record) {
   return String(record.Code ?? record.code ?? record['Student Code'] ?? record.studentCode ?? record.StudentCode ?? '').trim();
@@ -38,6 +39,9 @@ module.exports = async function handler(req, res) {
   const session = validateSessionToken(req);
   if (!session) return res.status(401).json({ error: 'unauthorized' });
   if (session.role !== 'doctor') return res.status(403).json({ error: 'forbidden' });
+  const courseName = normalizeCourseName(session.courseName);
+  const courseStorageField = getCourseStorageFieldName(courseName);
+  if (!courseName || !courseStorageField) return res.status(403).json({ error: 'doctor_course_not_configured' });
 
   const kind = req.body?.kind;
   const lectureNumbers = validateLectureNumbers(req.body?.lectureNumbers);
@@ -82,9 +86,9 @@ module.exports = async function handler(req, res) {
 
     let workbookBuffer;
     if (kind === 'single') {
-      workbookBuffer = await createSingleLectureWorkbook(lectureData[0].records, lectureNumbers[0]);
+      workbookBuffer = await createSingleLectureWorkbook(lectureData[0].records, lectureNumbers[0], courseName);
     } else {
-      workbookBuffer = await createMultipleLecturesWorkbook(lectureData);
+      workbookBuffer = await createMultipleLecturesWorkbook(lectureData, courseName);
     }
 
     const filename = getExportFilename(kind, lectureNumbers);

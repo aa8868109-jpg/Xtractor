@@ -10,6 +10,14 @@ window.__XTRACTOR_APP_BOOT__ = 'xtractor-boot-v2026-09-28';
 const STUDENTS_TABLE = 'LEC_1';
 const MODE_TABLE = 'MODE'; // Mode control table (ON/OFF and lecture number)
 const MODE_RECORD_NAME = 'Website Status'; // Must match the Firestore document name used in MODE collection
+const COURSE_NAMES = [
+    'مبادئ قانون',
+    'مبادئ محاسبة مالية',
+    'مبادئ اقتصاد',
+    'إدارة أعمال',
+    'لغة انجليزية'
+];
+const TOTAL_COURSE_LECTURES = 15;
 
 // Proxy configuration (empty => same origin)
 const API_PROXY_BASE = '';
@@ -46,6 +54,10 @@ let currentMode = null; // 'student' or 'doctor'
 let currentStudentCode = null;
 let currentStudentName = null; // To save student name
 let currentStudentRecord = null;
+let currentDoctorName = null;
+let currentDoctorCourse = null;
+let currentCourseName = null;
+let courseAttendanceSummaryCache = null;
 // Safe storage wrapper for non-sensitive, current-tab state.
 const _inMemoryStorage = {};
 let _sessionStorageAvailable = false;
@@ -544,11 +556,12 @@ async function getSelectedLectureFromMode() {
 
         const lectureNum = record.fields?.Lecture;
         const studentMode = record.fields?.['Student Mode'];
-        if ((studentMode === 'ON' || studentMode === true) && lectureNum) {
-            return parseInt(lectureNum, 10);
+        const courseName = record.fields?.['Course Name'];
+        if ((studentMode === 'ON' || studentMode === true) && lectureNum && COURSE_NAMES.includes(courseName)) {
+            return { lectureNumber: parseInt(lectureNum, 10), courseName };
         }
 
-        console.warn('⚠️ Student mode is disabled or no lecture is selected');
+        console.warn('⚠️ Student mode is disabled or no lecture/course is selected');
         return null;
     } catch (error) {
         console.error('❌ خطأ في قراءة جدول MODE:', error);
@@ -567,6 +580,11 @@ async function getSelectedLectureFromMode() {
  * تحديث حالة Student Mode في جدول MODE
  */
 async function updateStudentMode(lectureNumber, isEnabled) {
+    if (isEnabled && !COURSE_NAMES.includes(currentDoctorCourse)) {
+        showAlert('Doctor course is missing or invalid. Please sign in again.', 'error');
+        return false;
+    }
+
     try {
         // البحث عن السجل في جدول MODE
         console.log('🔍 جاري البحث في جدول MODE...');
@@ -622,7 +640,8 @@ async function updateStudentMode(lectureNumber, isEnabled) {
             {
                 fields: {
                     'Lecture': isEnabled ? String(lectureNumber) : null,
-                    'Student Mode': isEnabled ? 'ON' : 'OFF'
+                    'Student Mode': isEnabled ? 'ON' : 'OFF',
+                    'Course Name': currentDoctorCourse
                 }
             },
             { headers: getDataHeaders() }
@@ -703,7 +722,8 @@ async function updateSelectedQR(lectureNumber, qrValue) {
                 fields: {
                     'Lecture': String(lectureNumber),
                     'QR Selected': qrValue === 'NONE' ? null : qrValue,
-                    'Student Mode': studentMode
+                    'Student Mode': studentMode,
+                    'Course Name': currentDoctorCourse
                 }
             },
             { headers: getDataHeaders() }
@@ -806,7 +826,8 @@ function syncLiveQrToMode() {
             fields: {
                 'Lecture': String(currentLectureNumber),
                 'QR Selected': qrValue,
-                'Student Mode': 'ON'
+                    'Student Mode': 'ON',
+                    'Course Name': currentDoctorCourse
             }
         },
         { headers: getDataHeaders() }
@@ -1234,7 +1255,7 @@ async function showStudentInterface() {
 /**
  * عرض لوحة تحكم المحاضر
  */
-function showDoctorInterface(doctorName = '') {
+function showDoctorInterface(doctorName = '', courseName = '') {
     // Hide login interface
     document.getElementById('login-section').style.display = 'none';
     document.getElementById('student-section').style.display = 'none';
@@ -1244,7 +1265,9 @@ function showDoctorInterface(doctorName = '') {
     // Show top bar
     const topBar = document.getElementById('top-bar');
     topBar.style.display = 'block';
-    document.getElementById('mode-badge').textContent = doctorName || 'INSTRUCTOR MODE';
+    currentDoctorName = doctorName;
+    currentDoctorCourse = COURSE_NAMES.includes(courseName) ? courseName : null;
+    document.getElementById('mode-badge').textContent = [currentDoctorName, currentDoctorCourse].filter(Boolean).join(' · ') || 'INSTRUCTOR MODE';
     document.getElementById('mode-badge').className = 'mode-badge doctor';
     
     // If there's a saved lecture, display it
@@ -1302,6 +1325,12 @@ async function exitMode() {
     currentMode = null;
     currentStudentCode = null;
     currentStudentRecord = null;
+    currentDoctorName = null;
+    currentDoctorCourse = null;
+    currentCourseName = null;
+    courseAttendanceSummaryCache = null;
+    preparationCandidateCache = null;
+    preparationSearchVersion++;
     deviceIP = null; // ✅ Important: Reset Device IP
     lastSavedLocation = null;
     lastLocationWriteAt = 0;
@@ -1536,6 +1565,10 @@ async function saveStudentLoginData(studentCode, lectureNumber, studentName, stu
  */
 async function updateStudentAttendance(studentCode, lectureNumber, tableName, qrToken, existingStudentRecord = null) {
     try {
+        if (!COURSE_NAMES.includes(currentCourseName)) {
+            console.warn('Cannot record attendance without the course bound to this student session.');
+            return null;
+        }
         if (!hasValidDeviceIp(deviceIP)) {
             console.warn('❌ Refusing to update attendance because Device IP is missing or invalid.');
             return null;
@@ -1563,7 +1596,7 @@ async function updateStudentAttendance(studentCode, lectureNumber, tableName, qr
                 id: recordId,
                 qrToken,
                 fields: {
-                    Qr_Live: true,
+                    [currentCourseName]: true,
                     ...(mapsLink ? { Location: mapsLink } : {})
                 }
             },
@@ -1608,7 +1641,7 @@ async function addStudentToLecture(studentCode, lectureNumber, tableName) {
                             'Location': `https://maps.google.com/?q=${studentLocation.lat},${studentLocation.lng}`,
                             'Region': 'In region',
                             'Device IP': deviceIP,
-                            'Qr_Live': false
+                            ...Object.fromEntries(COURSE_NAMES.map(course => [course, false]))
                         }
                     }
                 ]
@@ -1756,7 +1789,7 @@ async function loadStudentLiveQrStatus(studentCode, lectureNumber, tableName, ex
         const fields = studentRecord.fields || {};
         const isRecorded = value => value === true || value === 'true' || value === 1 || value === '1';
 
-        liveQrScanned = isRecorded(fields.Qr_Live);
+        liveQrScanned = COURSE_NAMES.includes(currentCourseName) && isRecorded(fields[currentCourseName]);
 
         console.log('✓ تم قراءة حالة QR:', liveQrScanned);
         updateQRCheckmarks();
@@ -2052,6 +2085,7 @@ async function selectLecture() {
     currentLectureNumber = lectureNumber;
     lectureSelected = true;
     preparationCandidateCache = null;
+    courseAttendanceSummaryCache = null;
     preparationSearchVersion++;
     const preparationCodeInput = document.getElementById('manual-preparation-code');
     const preparationStudentSelect = document.getElementById('manual-preparation-student');
@@ -2196,39 +2230,43 @@ function startLectureStudentUpdates() {
  * Update registered student list
  * Display only students who scanned at least one QR
  */
-async function updateStudentsList() {
-    if (!currentLectureNumber) return;
-    
-    const students = await fetchLectureStudents(currentLectureNumber);
+async function getCourseAttendanceSummary(lectureNumber, forceRefresh = false) {
+    if (!Number(lectureNumber) || !COURSE_NAMES.includes(currentDoctorCourse || currentCourseName)) return null;
+
+    const courseName = currentDoctorCourse || currentCourseName;
+    const cacheKey = `${courseName}:${lectureNumber}`;
+    if (!forceRefresh && courseAttendanceSummaryCache?.cacheKey === cacheKey && Date.now() - courseAttendanceSummaryCache.timestamp < 15000) {
+        return courseAttendanceSummaryCache.payload;
+    }
+
+    const response = await apiGet(
+        `/api/data/AttendanceSummary?lecture=${encodeURIComponent(lectureNumber)}${refreshParam}`,
+        { headers: getDataHeaders() }
+    );
+    const payload = response?.data;
+    if (!payload || !Array.isArray(payload.records)) throw new Error('Invalid course attendance summary response');
+    courseAttendanceSummaryCache = { cacheKey, timestamp: Date.now(), payload };
+    return payload;
+}
+
+async function updateStudentsList(forceRefresh = false) {
+    if (!currentLectureNumber || !COURSE_NAMES.includes(currentDoctorCourse)) return;
+
     const studentsList = document.getElementById('attended-students-view');
     const countEl = document.getElementById('attended-student-count');
     if (!studentsList) return;
-    const isRecorded = value => value === true || value === 'true' || value === 1 || value === '1';
-    
-    // Filter students - show only those with at least one QR code true
-    const attendedStudents = students.filter(record => {
-        const student = record.fields || {};
-        const hasLiveQR = isRecorded(student.Qr_Live);
-        return hasLiveQR;
-    });
-
-    await Promise.all(attendedStudents.map(async record => {
-        const fields = record.fields || {};
-        if (getStudentName(fields)) return;
-        const code = String(fields.Code || record.id || '').trim();
-        if (!code) return;
-        const directoryStudent = await findStudent(code);
-        const directoryName = getStudentName(directoryStudent?.fields);
-        if (directoryName) fields.Name = directoryName;
-    }));
+    const attendancePage = document.getElementById('attendance-view-page');
+    if (!forceRefresh && attendancePage?.style.display === 'none') return;
+    const summary = await getCourseAttendanceSummary(currentLectureNumber, forceRefresh);
+    const attendedStudents = summary.records.filter(record => record.fields?.CurrentLectureAttended === true);
     
     if (attendedStudents.length === 0) {
-        studentsList.innerHTML = '<div class="empty-list">No students have scanned the live QR yet</div>';
-        if (countEl) countEl.textContent = '0 students attended';
+        studentsList.innerHTML = `<div class="empty-list">No attendance recorded for ${escapeHtml(currentDoctorCourse)} in this lecture.</div>`;
+        if (countEl) countEl.textContent = `${currentDoctorCourse} · 0/${summary.totalLectures} lectures · 0%`;
         return;
     }
 
-    if (countEl) countEl.textContent = `${attendedStudents.length} student(s) attended`;
+    if (countEl) countEl.textContent = `${currentDoctorCourse} · ${attendedStudents.length} in this lecture · denominator ${summary.totalLectures}`;
 
     let html = '';
     attendedStudents.forEach(record => {
@@ -2239,9 +2277,11 @@ async function updateStudentsList() {
 
         const safeStudentName = escapeHtml(studentName);
         const safeStudentCode = escapeHtml(studentCode);
-
-        // Count scanned QR codes
-        const attendanceMethod = student['Qr Live Source'] === 'doctor' ? 'BY DR' : 'LIVE QR';
+        const attendanceCount = Number(student.AttendanceCount || 0);
+        const attendanceTotal = Number(student.AttendanceTotal || summary.totalLectures);
+        const attendancePercent = Number(student.AttendancePercent || 0);
+        const attendanceMethod = student.AttendanceSource === 'doctor' ? 'BY DR' : 'LIVE QR';
+        const attendanceLabel = `${attendanceMethod} · ${attendanceCount}/${attendanceTotal} (${attendancePercent}%)`;
 
         // Check if student is out of region
         const isOutRegion = region === 'Out region';
@@ -2253,7 +2293,7 @@ async function updateStudentsList() {
                     <div class="student-name">${safeStudentName} ${locationIndicator}</div>
                     <div class="student-code">Code: ${safeStudentCode}</div>
                 </div>
-                <div class="student-status">${attendanceMethod}</div>
+                <div class="student-status">${escapeHtml(attendanceLabel)}</div>
             </div>
         `;
     });
@@ -2268,12 +2308,13 @@ async function openAttendanceView() {
     if (doctorPanel) doctorPanel.style.display = 'none';
     if (topBar) topBar.style.display = 'none';
     if (attendancePage) attendancePage.style.display = 'block';
-    await updateStudentsList();
+    await updateStudentsList(true);
 }
 
 async function refreshAttendanceView() {
     invalidateLectureStudentsCache(currentLectureNumber);
-    await updateStudentsList();
+    courseAttendanceSummaryCache = null;
+    await updateStudentsList(true);
 }
 
 function closeAttendanceView() {
@@ -2291,9 +2332,10 @@ async function loadPreparationCandidates(lectureNumber) {
         return preparationCandidateCache;
     }
 
-    const [directoryRecords, lectureRecords] = await Promise.all([
+    const [directoryRecords, lectureRecords, attendanceSummary] = await Promise.all([
         fetchLectureStudents(1),
-        lectureKey === '1' ? Promise.resolve(null) : fetchLectureStudents(lectureNumber)
+        lectureKey === '1' ? Promise.resolve(null) : fetchLectureStudents(lectureNumber),
+        getCourseAttendanceSummary(lectureNumber)
     ]);
     const currentRecords = lectureRecords || directoryRecords;
     const studentsByCode = new Map();
@@ -2316,7 +2358,12 @@ async function loadPreparationCandidates(lectureNumber) {
     preparationCandidateCache = {
         lectureKey,
         students: Array.from(studentsByCode.values()),
-        lectureRecords: currentRecords
+        lectureRecords: currentRecords,
+        attendanceByCode: new Map((attendanceSummary?.records || []).map(record => [
+            String(record.fields?.Code || record.id || '').trim(),
+            record.fields || {}
+        ])),
+        totalLectures: attendanceSummary?.totalLectures || TOTAL_COURSE_LECTURES
     };
     return preparationCandidateCache;
 }
@@ -2362,7 +2409,15 @@ async function searchPreparationStudents() {
         matches.forEach(record => {
             const code = getStudentCodeFromRecord(record) || String(record.id || '').trim();
             const name = getStudentName(record.fields || {});
-            const option = new Option(name ? `${code} - ${name}` : code, code);
+            const attendance = candidates.attendanceByCode.get(code) || {};
+            const count = Number(attendance.AttendanceCount || 0);
+            const total = Number(attendance.AttendanceTotal || candidates.totalLectures);
+            const percent = Number(attendance.AttendancePercent || 0);
+            const optionLabel = `${code} - ${name || 'Unknown'} - ${count}/${total} (${percent}%)`;
+            const option = new Option(optionLabel, code);
+            option.dataset.attendanceCount = String(count);
+            option.dataset.attendanceTotal = String(total);
+            option.dataset.attendancePercent = String(percent);
             select.add(option);
         });
         select.disabled = false;
@@ -2379,7 +2434,14 @@ async function searchPreparationStudents() {
 function updatePreparationButtonState() {
     const select = document.getElementById('manual-preparation-student');
     const button = document.getElementById('manual-preparation-btn');
+    const summary = document.getElementById('manual-preparation-student-stats');
     if (button) button.disabled = manualPreparationInProgress || !select?.value;
+    if (summary) {
+        const option = select?.selectedOptions?.[0];
+        summary.textContent = option?.value
+            ? `Course attendance: ${option.dataset.attendanceCount}/${option.dataset.attendanceTotal} lectures (${option.dataset.attendancePercent}%).`
+            : '';
+    }
 }
 
 async function prepareSelectedStudent() {
@@ -2394,6 +2456,10 @@ async function prepareSelectedStudent() {
     }
     if (!currentLectureNumber || !selectedCode || !preparationCandidateCache) {
         showAlert('Select a lecture and a student first.', 'warning');
+        return;
+    }
+    if (!COURSE_NAMES.includes(currentDoctorCourse)) {
+        showAlert('Your doctor account has no valid course configured.', 'error');
         return;
     }
 
@@ -2411,8 +2477,9 @@ async function prepareSelectedStudent() {
     const studentName = getStudentName(selectedStudent.fields || {});
     const fields = {
         Code: selectedCode,
-        Qr_Live: true,
-        Qr_Live_Source: 'doctor',
+        ...(!existingLectureRecord ? Object.fromEntries(COURSE_NAMES.map(course => [course, false])) : {}),
+        [currentDoctorCourse]: true,
+        [`${currentDoctorCourse} Source`]: 'doctor',
         ...(studentName ? { name: studentName } : {})
     };
 
@@ -2438,7 +2505,8 @@ async function prepareSelectedStudent() {
 
         invalidateLectureStudentsCache(currentLectureNumber);
         preparationCandidateCache = null;
-        await updateStudentsList();
+        courseAttendanceSummaryCache = null;
+        await updateStudentsList(true);
         if (status) status.textContent = `Student ${selectedCode} prepared successfully.`;
         showAlert(`✓ Student ${selectedCode} prepared successfully.`, 'success');
         await searchPreparationStudents();
@@ -2653,21 +2721,23 @@ async function submitStudentCode() {
         }
 
         if (authResponse.data.role === 'doctor') {
-            showDoctorInterface(authResponse.data.doctorName);
+            showDoctorInterface(authResponse.data.doctorName, authResponse.data.courseName);
             if (signInBtn) signInBtn.disabled = false;
             return;
         }
 
         // Step 1: Read lecture from MODE table (fast - cached)
-        const lectureNumber = await getSelectedLectureFromMode();
+        const activeMode = await getSelectedLectureFromMode();
+        const lectureNumber = activeMode?.lectureNumber;
         
-        if (!lectureNumber) {
-            showAlert('⚠️ Student mode not enabled', 'warning');
+        if (!lectureNumber || activeMode.courseName !== authResponse.data.courseName) {
+            showAlert('⚠️ Student mode or course is not enabled for this account.', 'warning');
             if (signInBtn) signInBtn.disabled = false;
             return;
         }
 
         currentLectureNumber = lectureNumber;
+        currentCourseName = activeMode.courseName;
         const tableName = `LEC_${lectureNumber}`;
 
         // Step 2: permissions are required before any student data is written.

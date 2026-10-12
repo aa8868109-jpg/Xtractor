@@ -13,6 +13,12 @@ const {
   isValidDeviceToken
 } = require('../lib/device-policy');
 const { findDoctorAccountMatches } = require('../lib/doctor-accounts');
+const {
+  buildAttendanceSummary,
+  buildCourseAttendanceRecords,
+  getCourseStorageFieldName,
+  normalizeCourseName
+} = require('../lib/course-policy');
 
 const workspaceRoot = path.join(__dirname, '..');
 
@@ -57,13 +63,14 @@ test('cookie-authenticated writes without Origin are rejected', () => {
 
 test('students can only mark their own current lecture with the active live QR', () => {
   const liveQr = `XTRACTOR-${Date.now()}-abc12345-xy99`;
+  const courseName = 'مبادئ قانون';
   const request = {
     collection: 'LEC_4',
-    session: { role: 'student', userCode: 'S-4', lecture: 4 },
+    session: { role: 'student', userCode: 'S-4', lecture: 4, courseName },
     documentId: 'S-4',
     currentRecord: { id: 'S-4', data: () => ({ Code: 'S-4' }) },
-    modeRecord: { Student_Mode: true, Lecture: 4, QR_Selected: liveQr },
-    fields: { Qr_Live: true },
+    modeRecord: { Student_Mode: true, Lecture: 4, Course_Name: courseName, QR_Selected: liveQr },
+    fields: { [courseName]: true },
     qrToken: liveQr
   };
 
@@ -75,9 +82,11 @@ test('students can only mark their own current lecture with the active live QR',
     modeRecord: { ...request.modeRecord, QR_Selected: expiredQr },
     qrToken: expiredQr
   }), 'student_expired_live_qr');
-  assert.equal(validateStudentPatch({ ...request, fields: { Qr_Live: true, Code: 'S-4' } }), 'student_forbidden_fields');
+  assert.equal(validateStudentPatch({ ...request, fields: { [courseName]: true, Code: 'S-4' } }), 'student_forbidden_fields');
   assert.equal(validateStudentPatch({ ...request, documentId: 'S-5' }), 'student_forbidden_record');
   assert.equal(validateStudentPatch({ ...request, collection: 'LEC_5' }), 'student_forbidden_lecture');
+  assert.equal(validateStudentPatch({ ...request, fields: { 'مبادئ اقتصاد': true } }), 'student_forbidden_fields');
+  assert.equal(validateStudentPatch({ ...request, modeRecord: { ...request.modeRecord, Course_Name: 'مبادئ اقتصاد' } }), 'student_course_mismatch');
 });
 
 test('CSP disallows dynamic and inline scripts and HTML has no inline handlers', () => {
@@ -126,13 +135,65 @@ test('device binding uses a random opaque cookie and stores only its hash', () =
 
 test('doctor authentication resolves exactly the document matching its Password field', () => {
   const documents = [
-    { id: 'Dr Ehab Younes', data: () => ({ Password: 'secret-one' }) },
-    { id: 'Dr Other', data: () => ({ Password: 'secret-two' }) }
+    { id: 'Dr Ehab Younes', data: () => ({ Password: 'secret-one', 'Course Name': 'مبادئ قانون' }) },
+    { id: 'Dr Other', data: () => ({ Password: 'secret-two', 'Course Name': 'مبادئ اقتصاد' }) }
   ];
-  assert.deepEqual(findDoctorAccountMatches(documents, 'secret-one'), ['Dr Ehab Younes']);
+  assert.deepEqual(findDoctorAccountMatches(documents, 'secret-one'), [
+    { doctorName: 'Dr Ehab Younes', courseName: 'مبادئ قانون' }
+  ]);
   assert.deepEqual(findDoctorAccountMatches(documents, 'wrong-password'), []);
   assert.deepEqual(findDoctorAccountMatches([
     ...documents,
-    { id: 'Dr Duplicate', data: () => ({ Password: 'secret-one' }) }
-  ], 'secret-one'), ['Dr Ehab Younes', 'Dr Duplicate']);
+    { id: 'Dr Duplicate', data: () => ({ Password: 'secret-one', 'Course Name': 'مبادئ قانون' }) }
+  ], 'secret-one'), [
+    { doctorName: 'Dr Ehab Younes', courseName: 'مبادئ قانون' },
+    { doctorName: 'Dr Duplicate', courseName: 'مبادئ قانون' }
+  ]);
+  assert.deepEqual(findDoctorAccountMatches([
+    { id: 'Dr Missing Course', data: () => ({ Password: 'secret-three', 'Course Name': 'Unknown Subject' }) }
+  ], 'secret-three'), [{ doctorName: 'Dr Missing Course', courseName: null }]);
+});
+
+test('course attendance uses one supported course field and a fifteen-lecture denominator', () => {
+  const supportedCourses = ['مبادئ قانون', 'مبادئ محاسبة مالية', 'مبادئ اقتصاد', 'إدارة أعمال', 'لغة انجليزية'];
+  supportedCourses.forEach(courseName => assert.ok(getCourseStorageFieldName(courseName)));
+  assert.equal(getCourseStorageFieldName('مبادئ قانون'), 'مبادئ_قانون');
+  assert.equal(normalizeCourseName('مادة غير معتمدة'), null);
+  assert.deepEqual(buildAttendanceSummary(3), {
+    attendanceCount: 3,
+    totalLectures: 15,
+    attendancePercent: 20
+  });
+});
+
+test('course summary counts each lecture once and reports current lecture source', () => {
+  const summary = buildCourseAttendanceRecords([
+    {
+      lectureNumber: 1,
+      records: [{ id: 'S-1', fields: { Code: 'S-1', name: 'Student One', مبادئ_قانون: true } }]
+    },
+    {
+      lectureNumber: 2,
+      records: [
+        { id: 'S-1', fields: { Code: 'S-1', name: 'Student One', مبادئ_قانون: true } },
+        { id: 'duplicate', fields: { Code: 'S-1', 'مبادئ قانون': true } }
+      ]
+    },
+    {
+      lectureNumber: 3,
+      records: [{ id: 'S-1', fields: { Code: 'S-1', name: 'Student One', مبادئ_قانون: true, مبادئ_قانون_Source: 'doctor' } }]
+    }
+  ], 'مبادئ قانون', 3);
+
+  assert.equal(summary.length, 1);
+  assert.equal(summary[0].fields.AttendanceCount, 3);
+  assert.equal(summary[0].fields.AttendancePercent, 20);
+  assert.equal(summary[0].fields.CurrentLectureAttended, true);
+  assert.equal(summary[0].fields.AttendanceSource, 'doctor');
+
+  const migratedFieldSummary = buildCourseAttendanceRecords([{
+    lectureNumber: 1,
+    records: [{ id: 'S-2', fields: { Code: 'S-2', مبادئ_قانون: false, 'مبادئ قانون': true } }]
+  }], 'مبادئ قانون', 1);
+  assert.equal(migratedFieldSummary[0].fields.AttendanceCount, 1);
 });

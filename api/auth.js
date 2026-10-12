@@ -13,6 +13,7 @@ const {
     isValidDeviceToken
 } = require('../lib/device-policy');
 const { findDoctorAccountMatches } = require('../lib/doctor-accounts');
+const { getCourseStorageFieldName, normalizeCourseName } = require('../lib/course-policy');
 
 function getCookieSecurityFlags(req = null) {
     const proto = (req?.headers?.['x-forwarded-proto'] || req?.headers?.['X-Forwarded-Proto'] || '').toLowerCase();
@@ -126,11 +127,15 @@ module.exports = async function handler(req, res) {
         }
 
         if (matchingDoctorNames.length === 1) {
-            const doctorName = matchingDoctorNames[0];
-            const token = createSessionToken({ role: 'doctor', doctorName, issuedAt: Date.now() });
+            const { doctorName, courseName } = matchingDoctorNames[0];
+            if (!doctorName || !courseName) {
+                logSecurityEvent('doctor_login_course_missing', { req });
+                return res.status(401).json({ authenticated: false, reason: 'doctor_course_not_configured' });
+            }
+            const token = createSessionToken({ role: 'doctor', doctorName, courseName, issuedAt: Date.now() });
             setSessionCookie(res, token, req);
             logSecurityEvent('doctor_login_success', { req, doctorName });
-            return res.json({ authenticated: true, role: 'doctor', doctorName });
+            return res.json({ authenticated: true, role: 'doctor', doctorName, courseName });
         }
 
         if (!/^[A-Za-z0-9\-_]+$/.test(submittedCode)) {
@@ -142,9 +147,11 @@ module.exports = async function handler(req, res) {
         const modeData = modeSnap.exists ? modeSnap.data() : {};
         const lectureNumber = Number(modeData.Lecture || 0);
         const isModeEnabled = modeData.Student_Mode === true || String(modeData.Student_Mode || '').toLowerCase() === 'on';
+        const courseName = normalizeCourseName(modeData.Course_Name ?? modeData['Course Name']);
+        const courseField = getCourseStorageFieldName(courseName);
 
-        if (!lectureNumber || !isModeEnabled) {
-            logSecurityEvent('student_login_disabled', { req, lectureNumber, isModeEnabled });
+        if (!lectureNumber || !isModeEnabled || !courseName || !courseField) {
+            logSecurityEvent('student_login_disabled', { req, lectureNumber, isModeEnabled, courseConfigured: Boolean(courseName) });
             return res.status(401).json({ authenticated: false, reason: 'student_mode_disabled' });
         }
 
@@ -234,10 +241,10 @@ module.exports = async function handler(req, res) {
             return res.status(401).json({ authenticated: false, reason: conflict });
         }
 
-        const token = createSessionToken({ role: 'student', userCode: submittedCode, lecture: lectureNumber, issuedAt: Date.now() });
+        const token = createSessionToken({ role: 'student', userCode: submittedCode, lecture: lectureNumber, courseName, issuedAt: Date.now() });
         setSessionCookie(res, token, req, deviceToken);
         logSecurityEvent('student_login_success', { req, lectureNumber });
-        return res.json({ authenticated: true, role: 'student', deviceIp: clientIp, allowLegacyIpMigration });
+        return res.json({ authenticated: true, role: 'student', deviceIp: clientIp, courseName, allowLegacyIpMigration });
     } catch (error) {
         logSecurityEvent('authentication_error', { req, message: error.message || String(error) });
         console.error('Authentication error:', error.message || error);
