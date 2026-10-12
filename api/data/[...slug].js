@@ -4,6 +4,7 @@ const { isIP } = require('net');
 const { checkRateLimit } = require('../../lib/rate-limit');
 const { enforceSameOrigin } = require('../../lib/request-security');
 const { validateStudentPatch } = require('../../lib/data-policy');
+const { isValidDeviceFingerprint } = require('../../lib/device-policy');
 
 function requireSession(req, res) {
   const session = validateSessionToken(req);
@@ -53,7 +54,7 @@ function toRecord(doc, collection = '', role = 'doctor') {
   const data = doc.data() || {};
   const fields = {};
   for (const [key, value] of Object.entries(data)) {
-    if (role === 'student' && ['Device_Fingerprint', 'Device Fingerprint', 'deviceFingerprint'].includes(key)) continue;
+    if (role === 'student' && ['Device_Fingerprint', 'Device Fingerprint', 'deviceFingerprint', 'Device_Id_Hash'].includes(key)) continue;
     const canonicalKey = canonicalizeNameKey(key);
     if (key === 'Qr_Live') fields.Qr_Live = value;
     else if (key === 'Device_ip') fields['Device IP'] = value;
@@ -291,15 +292,10 @@ module.exports = async function handler(req, res) {
               return res.status(400).json({ error: 'invalid_device_ip' });
             }
 
-            const storedDeviceIp = String(myRecord.data()?.Device_ip || myRecord.data()?.['Device IP'] || '').trim();
-            if (storedDeviceIp && storedDeviceIp === requestedIP) {
-              return res.json({ conflict: false });
-            }
-
             const incomingFingerprint = normalizeFingerprint(
               req.headers?.['x-device-fingerprint'] || req.headers?.['X-Device-Fingerprint'] || ''
             );
-            if (!incomingFingerprint) {
+            if (!isValidDeviceFingerprint(incomingFingerprint)) {
               return res.status(400).json({ error: 'device_fingerprint_missing' });
             }
 

@@ -1,10 +1,18 @@
 const crypto = require('crypto');
 const { getFirestore } = require('../lib/firebase');
-const { SESSION_COOKIE_NAME, createSessionToken } = require('../lib/session');
+const { SESSION_COOKIE_NAME, createSessionToken, getCookieValue } = require('../lib/session');
 const { logSecurityEvent } = require('../lib/security-logger');
 const { checkRateLimit } = require('../lib/rate-limit');
 const { enforceSameOrigin } = require('../lib/request-security');
-const { shouldEnforceFingerprintUniqueness } = require('../lib/device-policy');
+const {
+    DEVICE_COOKIE_NAME,
+    createDeviceToken,
+    hasDeviceIdConflict,
+    hasFingerprintConflict,
+    hashDeviceToken,
+    isValidDeviceFingerprint,
+    isValidDeviceToken
+} = require('../lib/device-policy');
 
 function safeEqual(left, right) {
     const leftBuffer = Buffer.from(String(left || ''));
@@ -19,11 +27,14 @@ function getCookieSecurityFlags(req = null) {
     return `SameSite=Lax${secureFlag}`;
 }
 
-function setSessionCookie(res, token, req = null) {
+function setSessionCookie(res, token, req = null, deviceToken = null) {
     const securityFlags = getCookieSecurityFlags(req);
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-    const cookieValue = `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=3600; HttpOnly; ${securityFlags};`;
-    res.setHeader('Set-Cookie', cookieValue);
+    const cookies = [`${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=3600; HttpOnly; ${securityFlags};`];
+    if (deviceToken) {
+        cookies.push(`${DEVICE_COOKIE_NAME}=${encodeURIComponent(deviceToken)}; Path=/; Max-Age=31536000; HttpOnly; ${securityFlags};`);
+    }
+    res.setHeader('Set-Cookie', cookies);
 }
 
 function clearSessionCookie(res, req = null) {
@@ -154,22 +165,23 @@ module.exports = async function handler(req, res) {
         const studentCodeFromDoc = getStudentCodeCandidates(studentDoc, submittedCode)[0] || submittedCode;
         const storedIp = String(studentData.Device_ip || studentData['Device IP'] || '').trim();
         const storedFingerprint = normalizeFingerprint(studentData.Device_Fingerprint || studentData.deviceFingerprint || studentData['Device Fingerprint'] || '');
-        const allowLegacyIpMigration = Boolean(storedIp && storedIp !== clientIp && isPrivateIpv4(storedIp));
-        const enforceFingerprintUniqueness = shouldEnforceFingerprintUniqueness({
-            storedIp,
-            currentIp: clientIp,
-            allowLegacyIpMigration
-        });
-
+        const existingDeviceToken = getCookieValue(req.headers?.cookie || req.headers?.Cookie, DEVICE_COOKIE_NAME);
+        const deviceToken = isValidDeviceToken(existingDeviceToken) ? existingDeviceToken : createDeviceToken();
+        const deviceIdHash = hashDeviceToken(deviceToken);
+        const storedDeviceIdHash = String(studentData.Device_Id_Hash || '').trim();
         if (!clientIp || clientIp === 'Unknown' || clientIp === 'unknown' || clientIp === '127.0.0.1' || clientIp === '::1') {
             logSecurityEvent('student_login_missing_ip', { req, lectureNumber, clientIp });
             return res.status(401).json({ authenticated: false, reason: 'device_ip_missing' });
         }
 
-        if (!incomingFingerprint) {
-            logSecurityEvent('student_login_missing_fingerprint', { req, lectureNumber });
-            return res.status(401).json({ authenticated: false, reason: 'device_fingerprint_missing' });
+        if (!isValidDeviceFingerprint(incomingFingerprint)) {
+            logSecurityEvent('student_login_invalid_fingerprint', { req, lectureNumber });
+            return res.status(401).json({ authenticated: false, reason: 'device_fingerprint_invalid' });
         }
+
+        const allowLegacyIpMigration = Boolean(
+            storedIp && storedIp !== clientIp && isPrivateIpv4(storedIp) && storedFingerprint === incomingFingerprint
+        );
 
         if (storedIp === 'Unknown' || storedIp === 'unknown') {
             logSecurityEvent('student_login_stored_unknown_ip', { req, lectureNumber, storedIp });
@@ -181,13 +193,13 @@ module.exports = async function handler(req, res) {
             return res.status(401).json({ authenticated: false, reason: 'device_ip_conflict' });
         }
 
-        if (allowLegacyIpMigration) {
-            logSecurityEvent('student_login_legacy_ip_migration', { req, lectureNumber });
+        if (storedDeviceIdHash && storedDeviceIdHash !== deviceIdHash) {
+            logSecurityEvent('student_login_device_binding_conflict', { req, lectureNumber });
+            return res.status(401).json({ authenticated: false, reason: 'device_id_conflict' });
         }
 
-        if (enforceFingerprintUniqueness && storedFingerprint && incomingFingerprint && storedFingerprint !== incomingFingerprint) {
-            logSecurityEvent('student_login_fingerprint_conflict', { req, lectureNumber });
-            return res.status(401).json({ authenticated: false, reason: 'device_fingerprint_conflict' });
+        if (allowLegacyIpMigration) {
+            logSecurityEvent('student_login_legacy_ip_migration', { req, lectureNumber });
         }
 
         if (!studentCodeFromDoc || studentCodeFromDoc === 'UNKNOWN' || studentCodeFromDoc === 'unknown') {
@@ -195,27 +207,39 @@ module.exports = async function handler(req, res) {
             return res.status(401).json({ authenticated: false, reason: 'student_code_missing' });
         }
 
-        if (incomingFingerprint && enforceFingerprintUniqueness) {
-            const sameFingerprintMatches = await lectureRef.where('Device_Fingerprint', '==', incomingFingerprint).limit(10).get();
-            if (!sameFingerprintMatches.empty) {
-                const conflictingStudent = sameFingerprintMatches.docs.find(doc => {
-                    const docCode = getStudentCodeCandidates(doc)[0] || '';
-                    return docCode && docCode !== String(submittedCode).trim();
-                });
-                if (conflictingStudent) {
-                    logSecurityEvent('student_login_shared_fingerprint_detected', { req, lectureNumber });
-                    return res.status(401).json({ authenticated: false, reason: 'shared_device_fingerprint' });
-                }
+        const conflict = await firestore.runTransaction(async transaction => {
+            const [deviceMatches, fingerprintMatches, legacyFingerprintMatches] = await Promise.all([
+                transaction.get(lectureRef.where('Device_Id_Hash', '==', deviceIdHash).limit(100)),
+                transaction.get(lectureRef.where('Device_Fingerprint', '==', incomingFingerprint).limit(100)),
+                transaction.get(lectureRef.where('Device Fingerprint', '==', incomingFingerprint).limit(100))
+            ]);
+            const matchingDevices = new Map();
+            for (const doc of [...deviceMatches.docs, ...fingerprintMatches.docs, ...legacyFingerprintMatches.docs]) {
+                matchingDevices.set(doc.id, doc);
             }
+            const deviceStudentCodes = deviceMatches.docs.map(doc => getStudentCodeCandidates(doc)[0] || '');
+            const fingerprintStudentCodes = [...fingerprintMatches.docs, ...legacyFingerprintMatches.docs]
+                .map(doc => getStudentCodeCandidates(doc)[0] || '');
+            if (deviceMatches.size >= 100 || fingerprintMatches.size >= 100 || legacyFingerprintMatches.size >= 100) {
+                return 'device_conflict_review';
+            }
+            if (hasDeviceIdConflict(deviceStudentCodes, submittedCode)) return 'device_id_conflict';
+            if (hasFingerprintConflict(fingerprintStudentCodes, submittedCode)) return 'shared_device_fingerprint';
+
+            transaction.set(studentDoc.ref, {
+                Device_ip: clientIp,
+                Device_Fingerprint: incomingFingerprint,
+                Device_Id_Hash: deviceIdHash
+            }, { merge: true });
+            return false;
+        });
+        if (conflict) {
+            logSecurityEvent('student_login_shared_device_detected', { req, lectureNumber });
+            return res.status(401).json({ authenticated: false, reason: conflict });
         }
 
-        await studentDoc.ref.set({
-            Device_ip: clientIp,
-            Device_Fingerprint: incomingFingerprint
-        }, { merge: true });
-
         const token = createSessionToken({ role: 'student', userCode: submittedCode, lecture: lectureNumber, issuedAt: Date.now() });
-        setSessionCookie(res, token, req);
+        setSessionCookie(res, token, req, deviceToken);
         logSecurityEvent('student_login_success', { req, lectureNumber });
         return res.json({ authenticated: true, role: 'student', deviceIp: clientIp, allowLegacyIpMigration });
     } catch (error) {

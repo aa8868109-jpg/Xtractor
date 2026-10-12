@@ -4,7 +4,14 @@ const test = require('node:test');
 const path = require('node:path');
 const { enforceSameOrigin } = require('../lib/request-security');
 const { validateStudentPatch } = require('../lib/data-policy');
-const { shouldEnforceFingerprintUniqueness } = require('../lib/device-policy');
+const {
+  createDeviceToken,
+  hasDeviceIdConflict,
+  hasFingerprintConflict,
+  hashDeviceToken,
+  isValidDeviceFingerprint,
+  isValidDeviceToken
+} = require('../lib/device-policy');
 
 const workspaceRoot = path.join(__dirname, '..');
 
@@ -85,8 +92,33 @@ test('CSP disallows dynamic and inline scripts and HTML has no inline handlers',
   assert.doesNotMatch(html, /<script\s*>/i);
 });
 
-test('an established same-IP student binding tolerates browser fingerprint collisions', () => {
-  assert.equal(shouldEnforceFingerprintUniqueness({ storedIp: '203.0.113.7', currentIp: '203.0.113.7' }), false);
-  assert.equal(shouldEnforceFingerprintUniqueness({ storedIp: '203.0.113.7', currentIp: '203.0.113.8' }), true);
-  assert.equal(shouldEnforceFingerprintUniqueness({ storedIp: '10.0.0.4', currentIp: '203.0.113.8', allowLegacyIpMigration: true }), false);
+test('Firestore client security rules deny all direct client access', () => {
+  const rules = fs.readFileSync(path.join(workspaceRoot, 'firestore.rules'), 'utf8');
+  assert.match(rules, /rules_version\s*=\s*'2'/);
+  assert.match(rules, /allow\s+read\s*,\s*write\s*:\s*if\s+false\s*;/);
+  assert.doesNotMatch(rules, /allow\s+read\s*,\s*write\s*:\s*if\s+true\s*;/);
+});
+
+test('a device fingerprint cannot be reused across student codes, even on the same IP', () => {
+  const currentCode = 'S-2';
+  const matchingDeviceStudentCodes = ['S-1', 'S-2'];
+  assert.equal(hasFingerprintConflict(matchingDeviceStudentCodes, currentCode), true);
+  assert.equal(hasFingerprintConflict(['S-2', 'S-2'], currentCode), false);
+});
+
+test('rejects short or malformed client-provided device fingerprints', () => {
+  assert.equal(isValidDeviceFingerprint('dGVzdHN0dWRlbnQ='), false);
+  assert.equal(isValidDeviceFingerprint('x'.repeat(64)), true);
+  assert.equal(isValidDeviceFingerprint('!'.repeat(64)), false);
+});
+
+test('device binding uses a random opaque cookie and stores only its hash', () => {
+  const deviceToken = createDeviceToken();
+  const deviceHash = hashDeviceToken(deviceToken);
+  assert.equal(isValidDeviceToken(deviceToken), true);
+  assert.equal(deviceToken.length, 43);
+  assert.notEqual(deviceHash, deviceToken);
+  assert.equal(hashDeviceToken(deviceToken), deviceHash);
+  assert.equal(hasDeviceIdConflict(['S-1'], 'S-2'), true);
+  assert.equal(hasDeviceIdConflict(['S-2'], 'S-2'), false);
 });

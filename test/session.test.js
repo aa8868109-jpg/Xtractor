@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createSessionToken, validateSessionToken } = require('../lib/session');
+const { createSessionToken, getCookieValue, validateSessionToken } = require('../lib/session');
 
 test('validates session tokens from cookies and bearer headers', () => {
   const token = createSessionToken({ role: 'doctor' });
@@ -55,4 +55,8 @@ test('requires a session secret in production', () => {
     if (previousLegacySecret === undefined) delete process.env.SESSION_SECRET;
     else process.env.SESSION_SECRET = previousLegacySecret;
   }
+});
+
+test('malformed cookie encoding is rejected without throwing', () => {
+  assert.equal(getCookieValue('xtractor_session=%E0%A4%A', 'xtractor_session'), null);
 });
