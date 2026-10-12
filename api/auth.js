@@ -145,12 +145,10 @@ module.exports = async function handler(req, res) {
 
         const modeSnap = await firestore.collection('MODE').doc('Website Status').get();
         const modeData = modeSnap.exists ? modeSnap.data() : {};
-        const legacyCourseName = normalizeCourseName(modeData.Course_Name ?? modeData['Course Name']);
-        const activeCourseName = legacyCourseName || getModeActiveCourse(modeData);
-        const resolvedLecture = activeCourseName ? getModeCourseLecture(modeData, activeCourseName) : null;
-        const lectureNumber = Number(modeData.Lecture || resolvedLecture || 0);
+        const activeCourseName = getModeActiveCourse(modeData);
+        const lectureNumber = activeCourseName ? getModeCourseLecture(modeData, activeCourseName) || 0 : 0;
         const isModeEnabled = modeData.Student_Mode === true || String(modeData.Student_Mode || '').toLowerCase() === 'on' || hasAnyActiveCourseLecture(modeData);
-        const courseName = normalizeCourseName(modeData.Course_Name ?? modeData['Course Name']) || activeCourseName;
+        const courseName = activeCourseName;
         const courseField = getCourseStorageFieldName(courseName);
 
         if (!lectureNumber || !isModeEnabled || !courseName || !courseField) {

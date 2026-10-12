@@ -269,13 +269,9 @@ module.exports = async function handler(req, res) {
         const snap = await ref.get();
         if (!snap.exists) return res.status(404).json({ error: 'mode_not_found' });
         const data = snap.data() || {};
-        const activeCourse = normalizeCourseName(data.Course_Name ?? data['Course Name']) || getModeActiveCourse(data);
-        const lectureValue = activeCourse ? getModeCourseLecture(data, activeCourse) : Number(data.Lecture || 0);
         const fields = {
           'Student Mode': (data.Student_Mode === true || String(data.Student_Mode || '').toLowerCase() === 'on' || hasAnyActiveCourseLecture(data)) ? 'ON' : 'OFF',
-          Lecture: lectureValue || null,
           'QR Selected': data.QR_Selected || 'NONE',
-          'Course Name': activeCourse || null,
           Name: data.Name || 'Website Status'
         };
         for (const courseName of COURSE_NAMES) {
@@ -301,16 +297,11 @@ module.exports = async function handler(req, res) {
       if (sourceFields['Student Mode'] !== undefined) {
         updates.Student_Mode = sourceFields['Student Mode'] === 'ON' || sourceFields['Student Mode'] === true;
       }
-      if (sourceFields.Lecture !== undefined) {
-        const lectureValue = Number(sourceFields.Lecture);
-        updates.Lecture = Number.isInteger(lectureValue) && lectureValue > 0 ? String(lectureValue) : null;
-      }
       if (sourceFields['Course Name'] !== undefined) {
-        const courseName = normalizeCourseName(sourceFields['Course Name']);
-        if (!courseName || !doctorCourse || courseName !== doctorCourse) {
-          return res.status(403).json({ error: 'doctor_course_mismatch' });
-        }
-        updates.Course_Name = courseName;
+        return res.status(400).json({ error: 'deprecated_mode_course_name_field' });
+      }
+      if (sourceFields.Lecture !== undefined) {
+        return res.status(400).json({ error: 'deprecated_mode_lecture_field' });
       }
       if (sourceFields['QR Selected'] !== undefined) {
         const selectedQr = sourceFields['QR Selected'] || 'NONE';
@@ -321,11 +312,11 @@ module.exports = async function handler(req, res) {
       }
       if (sourceFields.Name !== undefined) updates.Name = String(sourceFields.Name).slice(0, 200);
 
-      if ((sourceFields['Student Mode'] !== undefined || sourceFields.Lecture !== undefined || sourceFields['QR Selected'] !== undefined || sourceFields['Course Name'] !== undefined || (doctorCourse && sourceFields[doctorCourse] !== undefined)) && !doctorCourse) {
+      if (!doctorCourse) {
         return res.status(403).json({ error: 'doctor_course_not_configured' });
       }
 
-      if (doctorCourse && sourceFields[doctorCourse] !== undefined) {
+      if (sourceFields[doctorCourse] !== undefined) {
         const lectureValue = Number(sourceFields[doctorCourse]);
         updates[doctorCourse] = Number.isInteger(lectureValue) && lectureValue > 0 ? String(lectureValue) : null;
         if (sourceFields['Student Mode'] === undefined && lectureValue > 0) {
@@ -333,24 +324,16 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      if (doctorCourse && sourceFields['Student Mode'] !== undefined && sourceFields['Student Mode'] === 'OFF') {
+      if (sourceFields['Student Mode'] !== undefined && sourceFields['Student Mode'] === 'OFF') {
         updates[doctorCourse] = null;
-      }
-
-      if (doctorCourse && (sourceFields['Student Mode'] !== undefined || sourceFields.Lecture !== undefined || sourceFields['QR Selected'] !== undefined || sourceFields[doctorCourse] !== undefined)) {
-        updates.Course_Name = doctorCourse;
       }
 
       await ref.set(updates, { merge: true });
       const snap = await ref.get();
       const data = snap.data() || {};
-      const activeCourse = normalizeCourseName(data.Course_Name ?? data['Course Name']) || getModeActiveCourse(data);
-      const lectureValue = activeCourse ? getModeCourseLecture(data, activeCourse) : Number(data.Lecture || 0);
       const responseFields = {
         'Student Mode': (data.Student_Mode === true || String(data.Student_Mode || '').toLowerCase() === 'on' || hasAnyActiveCourseLecture(data)) ? 'ON' : 'OFF',
-        Lecture: lectureValue || null,
         'QR Selected': data.QR_Selected || 'NONE',
-        'Course Name': activeCourse || null,
         Name: data.Name || 'Website Status'
       };
       for (const courseName of COURSE_NAMES) {

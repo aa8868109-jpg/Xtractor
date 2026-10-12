@@ -69,7 +69,7 @@ test('students can only mark their own current lecture with the active live QR',
     session: { role: 'student', userCode: 'S-4', lecture: 4, courseName },
     documentId: 'S-4',
     currentRecord: { id: 'S-4', data: () => ({ Code: 'S-4' }) },
-    modeRecord: { Student_Mode: true, Lecture: 4, Course_Name: courseName, QR_Selected: liveQr },
+    modeRecord: { Student_Mode: true, [courseName]: 4, QR_Selected: liveQr },
     fields: { [courseName]: true },
     qrToken: liveQr
   };
@@ -86,7 +86,7 @@ test('students can only mark their own current lecture with the active live QR',
   assert.equal(validateStudentPatch({ ...request, documentId: 'S-5' }), 'student_forbidden_record');
   assert.equal(validateStudentPatch({ ...request, collection: 'LEC_5' }), 'student_forbidden_lecture');
   assert.equal(validateStudentPatch({ ...request, fields: { 'مبادئ اقتصاد': true } }), 'student_forbidden_fields');
-  assert.equal(validateStudentPatch({ ...request, modeRecord: { ...request.modeRecord, Course_Name: 'مبادئ اقتصاد' } }), 'student_course_mismatch');
+  assert.equal(validateStudentPatch({ ...request, modeRecord: { ...request.modeRecord, [courseName]: 5 } }), 'student_attendance_disabled');
 });
 
 test('per-course MODE lecture values support multiple concurrent doctor sessions', () => {
@@ -99,7 +99,6 @@ test('per-course MODE lecture values support multiple concurrent doctor sessions
     currentRecord: { id: 'S-20', data: () => ({ Code: 'S-20' }) },
     modeRecord: {
       Student_Mode: true,
-      Lecture: 5,
       'إدارة أعمال': '5',
       'مبادئ قانون': '3',
       QR_Selected: liveQr
@@ -115,7 +114,7 @@ test('per-course MODE lecture values support multiple concurrent doctor sessions
   }), 'student_attendance_disabled');
   assert.equal(validateStudentPatch({
     ...request,
-    modeRecord: { ...request.modeRecord, 'مبادئ قانون': '5' }
+    modeRecord: { ...request.modeRecord, 'مبادئ قانون': '7' }
   }), 'student_course_mismatch');
 });
 
