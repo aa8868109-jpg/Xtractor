@@ -2876,7 +2876,7 @@ async function submitStudentCode() {
                 headers: getDataHeaders(),
                 validateStatus: status => status < 500,
                 withCredentials: true
-            }).catch(() => null);
+            }).catch(error => error?.response || null);
         } else {
             const raw = await fetch('/api/auth', {
                 method: 'POST',
@@ -2889,14 +2889,20 @@ async function submitStudentCode() {
             }).catch(() => null);
             if (raw) {
                 const text = await raw.text();
-                try { authResponse = { data: JSON.parse(text) }; } catch (e) { authResponse = { data: { authenticated: false } }; }
+                try { authResponse = { data: JSON.parse(text), status: raw.status }; } catch (e) { authResponse = { data: { authenticated: false }, status: raw.status }; }
             }
         }
         safeStorage.removeItem('xtractor_session_token');
 
         if (!authResponse || !authResponse.data || authResponse.data.authenticated !== true) {
             const reason = authResponse?.data?.reason || 'unknown';
-            const reasonText = reason === 'student_mode_disabled'
+            const retryAfter = Number(authResponse?.data?.retryAfter);
+            const retryDuration = retryAfter >= 3600
+                ? `${Math.ceil(retryAfter / 3600)} ساعة`
+                : `${Math.ceil(retryAfter / 60)} دقيقة`;
+            const reasonText = reason === 'rate_limited'
+                ? `تم إيقاف المحاولات مؤقتًا. حاول بعد ${retryDuration}.`
+                : reason === 'student_mode_disabled'
                 ? 'وضع الطالب غير مفعل أو لا توجد محاضرة نشطة.'
                 : reason === 'student_not_found'
                     ? 'الكود غير موجود في جدول المحاضرة الحالية.'

@@ -208,10 +208,15 @@ module.exports = async function handler(req, res) {
                 res,
                 submittedCode,
                 429,
-                { error: 'rate_limited', retryAfter: loginLimit.retryAfter },
+                {
+                    authenticated: false,
+                    reason: 'rate_limited',
+                    retryAfter: loginLimit.retryAfter
+                },
                 false,
                 null,
-                loginLimit.identifierHash
+                loginLimit.identifierHash,
+                false
             );
         }
 

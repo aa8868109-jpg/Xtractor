@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
+  FIRST_BLOCK_MS,
+  FINAL_BLOCK_MS,
   checkLoginRateLimit,
   hashLoginIdentifier,
   recordLoginAttempt
@@ -8,51 +10,53 @@ const {
 
 process.env.LOGIN_IDENTIFIER_HMAC_KEY = 'test-only-login-hash-key';
 
-function makeDb(initialAttempts = []) {
-  const attempts = [...initialAttempts];
+function makeDb() {
+  const collections = new Map();
+  let nextId = 0;
+
+  function getCollection(name) {
+    if (!collections.has(name)) collections.set(name, new Map());
+    return collections.get(name);
+  }
+
+  function makeRef(collectionName, id = `generated-${++nextId}`) {
+    return {
+      id,
+      get store() {
+        return getCollection(collectionName);
+      }
+    };
+  }
+
   return {
-    attempts,
+    collections,
     collection(name) {
-      assert.equal(name, 'LOGIN');
       return {
-        add: async record => attempts.push(record),
-        where(field, operator, value) {
-          const conditions = [[field, operator, value]];
-          const query = {
-            where(nextField, nextOperator, nextValue) {
-              conditions.push([nextField, nextOperator, nextValue]);
-              return query;
-            },
-            orderBy(field, direction) {
-              query.sortField = field;
-              query.sortDirection = direction;
-              return query;
-            },
-            limit(maximum) {
-              query.maximum = maximum;
-              return query;
-            },
-            async get() {
-              const docs = attempts
-                .filter(attempt => conditions.every(([conditionField, conditionOperator, conditionValue]) => {
-                  if (conditionOperator === '==') return attempt[conditionField] === conditionValue;
-                  if (conditionOperator === '>=') {
-                    return new Date(attempt[conditionField]) >= conditionValue;
-                  }
-                  return false;
-                }))
-                .sort((left, right) => {
-                  const difference = new Date(left[query.sortField]) - new Date(right[query.sortField]);
-                  return query.sortDirection === 'desc' ? -difference : difference;
-                })
-                .slice(0, query.maximum)
-                .map((attempt, index) => ({ id: String(index), data: () => attempt }));
-              return { docs };
-            }
-          };
-          return query;
+        doc(id) {
+          return makeRef(name, id);
         }
       };
+    },
+    async runTransaction(callback) {
+      const writes = [];
+      const transaction = {
+        async get(ref) {
+          const value = ref.store.get(ref.id);
+          return {
+            exists: value !== undefined,
+            data: () => value
+          };
+        },
+        set(ref, value) {
+          writes.push(() => ref.store.set(ref.id, value));
+        },
+        delete(ref) {
+          writes.push(() => ref.store.delete(ref.id));
+        }
+      };
+      const result = await callback(transaction);
+      writes.forEach(write => write());
+      return result;
     }
   };
 }
@@ -68,8 +72,9 @@ test('persists each login attempt with the required Firestore fields and types',
 
   await recordLoginAttempt(db, req, 'Student-1', false);
 
-  assert.equal(db.attempts.length, 1);
-  const [attempt] = db.attempts;
+  const attempts = [...db.collections.get('LOGIN').values()];
+  assert.equal(attempts.length, 1);
+  const [attempt] = attempts;
   assert.equal(attempt.IP, '192.0.2.15');
   assert.equal(typeof attempt.Identifier, 'string');
   assert.equal(attempt.Identifier, hashLoginIdentifier('Student-1'));
@@ -79,31 +84,54 @@ test('persists each login attempt with the required Firestore fields and types',
   assert.equal(attempt.Identifier.includes('Student-1'), false);
 });
 
-test('limits failed attempts by IP or identifier and treats a success as a reset', async () => {
-  const now = Date.now();
+test('blocks after three failures for five minutes, then after three more for 24 hours', async () => {
+  const db = makeDb();
   const ip = '192.0.2.30';
-  const identifier = hashLoginIdentifier('Student-2');
-  const windowStart = now - 15 * 60 * 1000;
-  const db = makeDb([
-    { IP: ip, Identifier: identifier, Stutes: false, Time: new Date(windowStart + 1000) },
-    { IP: ip, Identifier: identifier, Stutes: true, Time: new Date(now - 3000) },
-    { IP: ip, Identifier: identifier, Stutes: false, Time: new Date(now - 2000) }
-  ]);
-  const req = { headers: { 'x-forwarded-for': ip } };
-  const options = {
-    now,
-    windowMs: 15 * 60 * 1000,
-    maxIpFailures: 5,
-    maxIdentifierFailures: 2
-  };
+  const req = { headers: { 'x-real-ip': ip } };
+  let now = Date.now();
 
-  assert.equal((await checkLoginRateLimit(db, req, 'Student-2', options)).allowed, true);
-  db.attempts.push(
-    { IP: ip, Identifier: identifier, Stutes: false, Time: new Date(now - 1000) }
-  );
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    assert.equal((await checkLoginRateLimit(db, req, 'Student-2', { now })).allowed, true);
+    await recordLoginAttempt(db, req, 'Student-2', false, null, true, { now });
+  }
 
-  const result = await checkLoginRateLimit(db, req, 'Student-2', options);
+  let result = await checkLoginRateLimit(db, req, 'Student-2', { now });
   assert.equal(result.allowed, false);
-  assert.equal(result.reason, 'identifier');
+  assert.equal(result.reason, 'ip_5_minute_block');
+  assert.ok(result.retryAfter <= FIRST_BLOCK_MS / 1000);
   assert.ok(result.retryAfter > 0);
+
+  now += FIRST_BLOCK_MS + 1;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    assert.equal((await checkLoginRateLimit(db, req, 'Student-2', { now })).allowed, true);
+    await recordLoginAttempt(db, req, 'Student-2', false, null, true, { now });
+  }
+
+  result = await checkLoginRateLimit(db, req, 'Student-2', { now });
+  assert.equal(result.allowed, false);
+  assert.equal(result.reason, 'ip_24_hour_block');
+  assert.ok(result.retryAfter <= FINAL_BLOCK_MS / 1000);
+  assert.ok(result.retryAfter > 0);
+  const [blacklistEntry] = [...db.collections.get('Blacklist').values()];
+  assert.equal(blacklistEntry.IP, ip);
+  assert.equal(blacklistEntry.reason, 'six_failed_login_attempts');
+  assert.equal(new Date(blacklistEntry.expiresAt).getTime(), now + FINAL_BLOCK_MS);
+
+  now += FINAL_BLOCK_MS + 1;
+  assert.equal((await checkLoginRateLimit(db, req, 'Student-2', { now })).allowed, true);
+  assert.equal(db.collections.get('Blacklist').size, 0);
+});
+
+test('a successful login clears the IP failure state', async () => {
+  const db = makeDb();
+  const req = { headers: { 'x-real-ip': '192.0.2.45' } };
+  const now = Date.now();
+
+  await recordLoginAttempt(db, req, 'Student-3', false, null, true, { now });
+  await recordLoginAttempt(db, req, 'Student-3', false, null, true, { now });
+  await recordLoginAttempt(db, req, 'Student-3', true, null, false, { now });
+
+  assert.equal((await checkLoginRateLimit(db, req, 'Student-3', { now })).allowed, true);
+  assert.equal(db.collections.get('LOGIN').size, 3);
+  assert.equal(db.collections.get('LOGIN_IP_LIMITS').size, 0);
 });
