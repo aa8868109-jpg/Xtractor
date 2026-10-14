@@ -1,0 +1,21 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "LOGIN",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "IP", "order": "ASCENDING" },
+        { "fieldPath": "Time", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "LOGIN",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "Identifier", "order": "ASCENDING" },
+        { "fieldPath": "Time", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

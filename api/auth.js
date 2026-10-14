@@ -8,6 +8,7 @@ const {
 } = require('../lib/session');
 const { logSecurityEvent } = require('../lib/security-logger');
 const { checkRateLimit } = require('../lib/rate-limit');
+const { checkLoginRateLimit, respondToLogin } = require('../lib/login-attempts');
 const { enforceSameOrigin } = require('../lib/request-security');
 const {
     DEVICE_COOKIE_NAME,
@@ -114,17 +115,22 @@ async function findStudentDocument(lectureRef, submittedCode) {
 
 module.exports = async function handler(req, res) {
     if (!enforceSameOrigin(req, res)) return;
-    if (!checkRateLimit(req, res, { endpoint: 'auth-ip', maxRequests: 600, windowMs: 60000 })) return;
 
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'method_not_allowed' });
     }
+
+    const isLoginRequest = req.body?.action !== 'logout' && req.body?.action !== 'switchLecture';
+    if (!isLoginRequest && !checkRateLimit(req, res, { endpoint: 'auth-ip', maxRequests: 600, windowMs: 60000 })) return;
 
     if (req.body?.action === 'logout') {
         clearSessionCookie(res, req);
         return res.status(200).json({ authenticated: false });
     }
 
+    let isLoginAttempt = false;
+    let loginFirestore = null;
+    let loginIdentifier = '';
     try {
         if (req.body?.action === 'switchLecture') {
             const session = validateSessionToken(req);
@@ -188,42 +194,77 @@ module.exports = async function handler(req, res) {
             });
         }
 
+        isLoginAttempt = true;
         const submittedCode = String(req.body?.code || '').trim();
-        if (!submittedCode || submittedCode.length > 128 || /[\u0000-\u001F\u007F]/.test(submittedCode)) {
-            logSecurityEvent('invalid_auth_input', { req, submittedCodeLength: submittedCode.length });
-            return res.status(401).json({ authenticated: false, reason: 'invalid_input' });
+        loginIdentifier = submittedCode;
+        loginFirestore = getFirestore();
+        const loginLimit = await checkLoginRateLimit(loginFirestore, req, submittedCode);
+        if (!loginLimit.allowed) {
+            res.setHeader('Retry-After', String(loginLimit.retryAfter));
+            logSecurityEvent('login_rate_limited', { req, reason: loginLimit.reason });
+            return await respondToLogin(
+                loginFirestore,
+                req,
+                res,
+                submittedCode,
+                429,
+                { error: 'rate_limited', retryAfter: loginLimit.retryAfter },
+                false,
+                null,
+                loginLimit.identifierHash
+            );
         }
 
-        const firestore = getFirestore();
+        if (!submittedCode || submittedCode.length > 128 || /[\u0000-\u001F\u007F]/.test(submittedCode)) {
+            logSecurityEvent('invalid_auth_input', { req, submittedCodeLength: submittedCode.length });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: 'invalid_input'
+            }, false, null, loginLimit.identifierHash);
+        }
+
+        const firestore = loginFirestore;
         const doctorAccountsSnapshot = await firestore.collection('Dr Accounts').get();
         const matchingDoctorNames = findDoctorAccountMatches(doctorAccountsSnapshot.docs, submittedCode);
         if (matchingDoctorNames.length > 1) {
             logSecurityEvent('doctor_login_duplicate_password', { req, matchCount: matchingDoctorNames.length });
-            return res.status(401).json({ authenticated: false, reason: 'ambiguous_doctor_password' });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: 'ambiguous_doctor_password'
+            }, false, null, loginLimit.identifierHash);
         }
 
         if (matchingDoctorNames.length === 1) {
             const { doctorName, courseName } = matchingDoctorNames[0];
             if (!doctorName || !courseName) {
                 logSecurityEvent('doctor_login_course_missing', { req });
-                return res.status(401).json({ authenticated: false, reason: 'doctor_course_not_configured' });
+                return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                    authenticated: false,
+                    reason: 'doctor_course_not_configured'
+                }, false, null, loginLimit.identifierHash);
             }
-            const token = createSessionToken({ role: 'doctor', doctorName, courseName, issuedAt: Date.now() });
-            setSessionCookie(res, token, req, null, getDoctorSessionCookieName(courseName));
             logSecurityEvent('doctor_login_success', { req, doctorName });
-            return res.json({ authenticated: true, role: 'doctor', doctorName, courseName });
+            const token = createSessionToken({ role: 'doctor', doctorName, courseName, issuedAt: Date.now() });
+            return await respondToLogin(
+                loginFirestore,
+                req,
+                res,
+                submittedCode,
+                200,
+                { authenticated: true, role: 'doctor', doctorName, courseName },
+                true,
+                () => setSessionCookie(res, token, req, null, getDoctorSessionCookieName(courseName)),
+                loginLimit.identifierHash
+            );
         }
 
         if (!/^[A-Za-z0-9\-_]+$/.test(submittedCode)) {
             logSecurityEvent('student_login_invalid_format', { req, submittedCodeLength: submittedCode.length });
-            return res.status(401).json({ authenticated: false, reason: 'invalid_format' });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: 'invalid_format'
+            }, false, null, loginLimit.identifierHash);
         }
-        if (!checkRateLimit(req, res, {
-            endpoint: 'student-login-code',
-            identity: submittedCode.toLowerCase(),
-            maxRequests: 6,
-            windowMs: 60000
-        })) return;
 
         const modeSnap = await firestore.collection('MODE').doc('Website Status').get();
         const modeData = modeSnap.exists ? modeSnap.data() : {};
@@ -233,7 +274,10 @@ module.exports = async function handler(req, res) {
 
         if (!isModeEnabled || activeCourses.length === 0) {
             logSecurityEvent('student_login_disabled', { req, isModeEnabled, activeCourseCount: activeCourses.length });
-            return res.status(401).json({ authenticated: false, reason: 'student_mode_disabled' });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: 'student_mode_disabled'
+            }, false, null, loginLimit.identifierHash);
         }
 
         let courseName = null;
@@ -253,12 +297,18 @@ module.exports = async function handler(req, res) {
 
         if (!studentDoc) {
             logSecurityEvent('student_login_failed', { req, activeCourseCount: activeCourses.length });
-            return res.status(401).json({ authenticated: false, reason: 'student_not_found' });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: 'student_not_found'
+            }, false, null, loginLimit.identifierHash);
         }
         const courseField = getCourseStorageFieldName(courseName);
         if (!courseField) {
             logSecurityEvent('student_login_course_missing', { req, lectureNumber });
-            return res.status(401).json({ authenticated: false, reason: 'student_mode_disabled' });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: 'student_mode_disabled'
+            }, false, null, loginLimit.identifierHash);
         }
 
         const clientIp = getClientIp(req);
@@ -273,12 +323,18 @@ module.exports = async function handler(req, res) {
         const storedDeviceIdHash = String(studentData.Device_Id_Hash || '').trim();
         if (!clientIp || clientIp === 'Unknown' || clientIp === 'unknown' || clientIp === '127.0.0.1' || clientIp === '::1') {
             logSecurityEvent('student_login_missing_ip', { req, lectureNumber, clientIp });
-            return res.status(401).json({ authenticated: false, reason: 'device_ip_missing' });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: 'device_ip_missing'
+            }, false, null, loginLimit.identifierHash);
         }
 
         if (!isValidDeviceFingerprint(incomingFingerprint)) {
             logSecurityEvent('student_login_invalid_fingerprint', { req, lectureNumber });
-            return res.status(401).json({ authenticated: false, reason: 'device_fingerprint_invalid' });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: 'device_fingerprint_invalid'
+            }, false, null, loginLimit.identifierHash);
         }
 
         const allowLegacyIpMigration = Boolean(
@@ -287,17 +343,26 @@ module.exports = async function handler(req, res) {
 
         if (storedIp === 'Unknown' || storedIp === 'unknown') {
             logSecurityEvent('student_login_stored_unknown_ip', { req, lectureNumber, storedIp });
-            return res.status(401).json({ authenticated: false, reason: 'device_ip_missing' });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: 'device_ip_missing'
+            }, false, null, loginLimit.identifierHash);
         }
 
         if (storedIp && storedIp !== 'Unknown' && storedIp !== clientIp && !allowLegacyIpMigration) {
             logSecurityEvent('student_login_ip_conflict', { req, lectureNumber, storedIp, clientIp });
-            return res.status(401).json({ authenticated: false, reason: 'device_ip_conflict' });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: 'device_ip_conflict'
+            }, false, null, loginLimit.identifierHash);
         }
 
         if (storedDeviceIdHash && storedDeviceIdHash !== deviceIdHash) {
             logSecurityEvent('student_login_device_binding_conflict', { req, lectureNumber });
-            return res.status(401).json({ authenticated: false, reason: 'device_id_conflict' });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: 'device_id_conflict'
+            }, false, null, loginLimit.identifierHash);
         }
 
         if (allowLegacyIpMigration) {
@@ -306,7 +371,10 @@ module.exports = async function handler(req, res) {
 
         if (!studentCodeFromDoc || studentCodeFromDoc === 'UNKNOWN' || studentCodeFromDoc === 'unknown') {
             logSecurityEvent('student_login_missing_code', { req, lectureNumber });
-            return res.status(401).json({ authenticated: false, reason: 'student_code_missing' });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: 'student_code_missing'
+            }, false, null, loginLimit.identifierHash);
         }
 
         const conflict = await firestore.runTransaction(async transaction => {
@@ -337,16 +405,36 @@ module.exports = async function handler(req, res) {
         });
         if (conflict) {
             logSecurityEvent('student_login_shared_device_detected', { req, lectureNumber });
-            return res.status(401).json({ authenticated: false, reason: conflict });
+            return await respondToLogin(loginFirestore, req, res, submittedCode, 401, {
+                authenticated: false,
+                reason: conflict
+            }, false, null, loginLimit.identifierHash);
         }
 
         const token = createSessionToken({ role: 'student', userCode: submittedCode, lecture: lectureNumber, courseName, issuedAt: Date.now() });
-        setSessionCookie(res, token, req, deviceToken);
         logSecurityEvent('student_login_success', { req, lectureNumber });
-        return res.json({ authenticated: true, role: 'student', deviceIp: clientIp, courseName, allowLegacyIpMigration });
+        return await respondToLogin(
+            loginFirestore,
+            req,
+            res,
+            submittedCode,
+            200,
+            { authenticated: true, role: 'student', deviceIp: clientIp, courseName, allowLegacyIpMigration },
+            true,
+            () => setSessionCookie(res, token, req, deviceToken),
+            loginLimit.identifierHash
+        );
     } catch (error) {
         logSecurityEvent('authentication_error', { req, message: error.message || String(error) });
         console.error('Authentication error:', error.message || error);
+        if (isLoginAttempt) {
+            if (!loginFirestore) {
+                return res.status(503).json({ error: 'login_audit_unavailable' });
+            }
+            return await respondToLogin(loginFirestore, req, res, loginIdentifier, 500, {
+                error: 'authentication_failed'
+            });
+        }
         return res.status(500).json({ error: 'authentication_failed' });
     }
 };
